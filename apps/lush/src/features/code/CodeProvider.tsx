@@ -51,11 +51,8 @@ export function CodeProvider({ children }: { children: ReactNode }) {
   const [sessions, setSessions] = useState<CodeSessionSummary[]>([]);
   const [activeSession, setActiveSession] = useState<CodeSession>();
   const activeSessionIdRef = useRef<string | undefined>(undefined);
-  const activeSessionRef = useRef<CodeSession | undefined>(undefined);
-
-  useEffect(() => {
-    activeSessionRef.current = activeSession;
-  }, [activeSession]);
+  const pollCursorRef = useRef(0);
+  const pollInFlightRef = useRef(false);
 
   const request = useCallback(async <Result,>(path: string, init?: RequestInit) => {
     if (!connection) throw new Error("The local Code sidecar is unavailable");
@@ -122,17 +119,29 @@ export function CodeProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!connection || !activeSession?.id || activeSession.status !== "running") return;
     const id = activeSession.id;
+    pollCursorRef.current = activeSession.events.at(-1)?.sequence ?? 0;
     const timer = window.setInterval(() => {
-      const after = activeSessionRef.current?.events.at(-1)?.sequence ?? 0;
-      void request<EventPage>(`/v1/sessions/${id}/events?after=${after}`).then((page) => {
+      // One poll at a time. An overlapping tick would read the cursor before the
+      // outstanding response advanced it and append the same events twice.
+      if (pollInFlightRef.current) return;
+      pollInFlightRef.current = true;
+      void request<EventPage>(`/v1/sessions/${id}/events?after=${pollCursorRef.current}`).then((page) => {
         if (activeSessionIdRef.current !== id) return;
-        setActiveSession((current) => (
-          current && current.id === id
-            ? { ...current, status: page.status, messages: page.messages, events: [...current.events, ...page.events] }
-            : current
-        ));
+        pollCursorRef.current = page.nextCursor;
+        setActiveSession((current) => {
+          if (!current || current.id !== id) return current;
+          // An idle tick must not copy the event list: that is the cost this is meant to remove.
+          if (!page.events.length && page.status === current.status) return current;
+          return {
+            ...current,
+            status: page.status,
+            messages: page.messages,
+            events: [...current.events, ...page.events]
+          };
+        });
         if (page.status !== "running") void refresh();
-      }).catch((reason) => setError(reason instanceof Error ? reason.message : String(reason)));
+      }).catch((reason) => setError(reason instanceof Error ? reason.message : String(reason)))
+        .finally(() => { pollInFlightRef.current = false; });
     }, 500);
     return () => window.clearInterval(timer);
   }, [activeSession?.id, activeSession?.status, connection, refresh, request]);
