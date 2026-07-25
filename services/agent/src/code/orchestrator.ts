@@ -134,7 +134,15 @@ export class LocalCodeOrchestrator {
   async events(id: string, after: number) {
     const session = await this.getSession(id);
     const events = session.events.filter((event) => event.sequence > after);
-    return { events, nextCursor: session.events.at(-1)?.sequence ?? after, session };
+    // Only the delta plus the fields a poller cannot derive from it: the
+    // reconstructed messages and the session status. Returning the whole
+    // session here made this endpoint as heavy as GET /v1/sessions/:id.
+    return {
+      events,
+      nextCursor: session.events.at(-1)?.sequence ?? after,
+      status: session.status,
+      messages: session.messages
+    };
   }
 
   async review(id: string, revision: string, comparisonRef?: string) {

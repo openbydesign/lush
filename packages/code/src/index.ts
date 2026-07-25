@@ -161,7 +161,12 @@ export type CodeSession = CodeSessionSummary & {
 
 export type StartCodeSessionRequest = { draft: CodeSessionDraft; input: string };
 export type SendCodeInputRequest = { input: string };
-export type EventPage = { events: HarnessEvent[]; nextCursor: number; session: CodeSession };
+export type EventPage = {
+  events: HarnessEvent[];
+  nextCursor: number;
+  status: CodeSessionStatus;
+  messages: CodeMessage[];
+};
 
 export type CodeReviewCommit = {
   id: string;
