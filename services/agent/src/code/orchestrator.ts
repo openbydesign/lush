@@ -133,13 +133,22 @@ export class LocalCodeOrchestrator {
 
   async events(id: string, after: number) {
     const session = await this.getSession(id);
-    const events = session.events.filter((event) => event.sequence > after);
+    // `after` reaches this through Number() on a query parameter, so it can be
+    // NaN, negative, fractional, non-finite or ahead of this session. Every
+    // comparison against NaN is false, and echoing a cursor beyond the current
+    // tail would let it skip events that are appended later. Keep nextCursor
+    // server-owned: unusable input resynchronises from the beginning, while a
+    // valid cursor remains unchanged.
+    const lastSequence = session.events.at(-1)?.sequence ?? 0;
+    const candidate = Number.isFinite(after) ? Math.max(0, Math.floor(after)) : 0;
+    const cursor = candidate <= lastSequence ? candidate : 0;
+    const events = session.events.filter((event) => event.sequence > cursor);
     // Only the delta plus the fields a poller cannot derive from it: the
     // reconstructed messages and the session status. Returning the whole
     // session here made this endpoint as heavy as GET /v1/sessions/:id.
     return {
       events,
-      nextCursor: session.events.at(-1)?.sequence ?? after,
+      nextCursor: lastSequence,
       status: session.status,
       messages: session.messages
     };
