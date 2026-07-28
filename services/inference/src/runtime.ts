@@ -1,6 +1,7 @@
 import { requiredEnvValue } from "@lush/config/env";
 import { getDb } from "@lush/db/client";
 import type {
+  InferenceModelCapabilities,
   InferenceProviderKind,
   InferenceProviderModelRow
 } from "@lush/db/schema";
@@ -34,6 +35,7 @@ export type ConnectedProvider = {
   models: Array<{
     id: string;
     label: string;
+    capabilities: InferenceModelCapabilities;
     enabled: boolean;
   }>;
 };
@@ -122,6 +124,7 @@ export async function createInferenceProvider(
             providerId: providerRow.id,
             modelId: model.id,
             label: model.label,
+            capabilities: model.capabilities,
             enabled: model.enabled,
             createdAt: now,
             updatedAt: now
@@ -171,6 +174,72 @@ export async function updateInferenceProvider(
   if (Number(result.numUpdatedRows) === 0) {
     throw new InferenceError("provider_not_found", "Provider was not found");
   }
+
+  return getInferenceConfig(organizationId);
+}
+
+export async function refreshInferenceProviderModels(
+  organizationId: string,
+  request: unknown
+) {
+  if (!isProviderModelsRefreshRequest(request)) {
+    throw new InferenceError(
+      "invalid_provider_refresh",
+      "Invalid provider refresh request"
+    );
+  }
+
+  const provider = await findProvider(organizationId, request.providerId);
+  const apiKey = await decryptSecret(provider.encryptedApiKey, {
+    organizationId,
+    kind: provider.kind
+  });
+  const models = await discoverModels({
+    kind: provider.kind,
+    baseUrl: provider.baseUrl,
+    apiKey
+  });
+  const now = new Date();
+
+  await getDb().transaction().execute(async (trx) => {
+    const staleModels = trx
+      .deleteFrom("inferenceProviderModels")
+      .where("providerId", "=", provider.id);
+
+    if (models.length === 0) {
+      await staleModels.execute();
+    } else {
+      await staleModels
+        .where(
+          "modelId",
+          "not in",
+          models.map((model) => model.id)
+        )
+        .execute();
+
+      await trx
+        .insertInto("inferenceProviderModels")
+        .values(
+          models.map((model) => ({
+            providerId: provider.id,
+            modelId: model.id,
+            label: model.label,
+            capabilities: model.capabilities,
+            enabled: model.enabled,
+            createdAt: now,
+            updatedAt: now
+          }))
+        )
+        .onConflict((oc) =>
+          oc.columns(["providerId", "modelId"]).doUpdateSet((eb) => ({
+            label: eb.ref("excluded.label"),
+            capabilities: eb.ref("excluded.capabilities"),
+            updatedAt: now
+          }))
+        )
+        .execute();
+    }
+  });
 
   return getInferenceConfig(organizationId);
 }
@@ -329,12 +398,16 @@ export async function* streamInferenceChat({
 }
 
 export class InferenceError extends Error {
+  readonly cause?: unknown;
+
   constructor(
     readonly code: string,
     message: string,
-    readonly status = 400
+    readonly status = 400,
+    cause?: unknown
   ) {
     super(message);
+    this.cause = cause;
   }
 }
 
@@ -384,7 +457,12 @@ async function loadConnectedProviders(
 function groupModelsByProvider(modelRows: InferenceProviderModelRow[]) {
   const grouped = new Map<
     string,
-    Array<{ id: string; label: string; enabled: boolean }>
+    Array<{
+      id: string;
+      label: string;
+      capabilities: InferenceModelCapabilities;
+      enabled: boolean;
+    }>
   >();
 
   for (const model of modelRows) {
@@ -393,6 +471,7 @@ function groupModelsByProvider(modelRows: InferenceProviderModelRow[]) {
       {
         id: model.modelId,
         label: model.label,
+        capabilities: model.capabilities,
         enabled: model.enabled
       }
     ]);
@@ -508,7 +587,9 @@ async function discoverModels(provider: {
   } catch (error) {
     throw new InferenceError(
       "model_discovery_failed",
-      error instanceof Error ? error.message : "Model discovery failed"
+      "Lush couldn't retrieve models from this provider. Check the API key and base URL, or try again shortly.",
+      400,
+      error
     );
   }
 }
@@ -543,6 +624,16 @@ function isProviderUpdateRequest(
     typeof request === "object" &&
     typeof (request as { providerId?: unknown }).providerId === "string" &&
     typeof (request as { enabled?: unknown }).enabled === "boolean"
+  );
+}
+
+function isProviderModelsRefreshRequest(
+  request: unknown
+): request is { providerId: string } {
+  return (
+    Boolean(request) &&
+    typeof request === "object" &&
+    typeof (request as { providerId?: unknown }).providerId === "string"
   );
 }
 

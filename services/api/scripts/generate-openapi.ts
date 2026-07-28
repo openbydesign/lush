@@ -312,11 +312,56 @@ const schemas: Record<string, JsonSchema> = {
       agents: describeSchema(stringSchema(), "Default model selection for agent workflows.")
     }
   },
+  InferenceModelInterface: {
+    type: "string",
+    enum: ["chat-completions", "messages", "responses", "embeddings"]
+  },
+  InferenceModelInputModality: {
+    type: "string",
+    enum: ["text", "image", "audio", "video", "pdf"]
+  },
+  InferenceModelOutputModality: {
+    type: "string",
+    enum: ["text", "image", "audio", "embedding"]
+  },
+  InferenceModelFeature: {
+    type: "string",
+    enum: [
+      "tools",
+      "structured-output",
+      "reasoning",
+      "citations",
+      "code-execution",
+      "batch"
+    ]
+  },
+  InferenceModelCapabilities: objectSchema({
+    interfaces: describeSchema(
+      arraySchema(ref("InferenceModelInterface")),
+      "Provider interfaces known to accept this model."
+    ),
+    inputModalities: describeSchema(
+      arraySchema(ref("InferenceModelInputModality")),
+      "Input modalities positively identified for this model."
+    ),
+    outputModalities: describeSchema(
+      arraySchema(ref("InferenceModelOutputModality")),
+      "Output modalities positively identified for this model."
+    ),
+    features: describeSchema(
+      arraySchema(ref("InferenceModelFeature")),
+      "Optional model features positively identified by the provider."
+    )
+  }, [], "Partial capability facts. Omitted fields are unknown, not unsupported."),
   InferenceModelStatus: objectSchema({
     id: describeSchema(stringSchema(), "Provider-native model identifier."),
     label: describeSchema(stringSchema(), "Display label for the model."),
+    capabilities: describeSchema(
+      ref("InferenceModelCapabilities"),
+      "Provider-reported or provider-contract model capabilities."
+    ),
     enabled: describeSchema({ type: "boolean" }, "Whether users can select this model.")
-  }, ["id", "label", "enabled"], "Model availability exposed by a configured inference provider."),
+  }, ["id", "label", "capabilities", "enabled"], "Model availability exposed by a configured inference provider."),
   InferenceProviderStatus: objectSchema({
     id: describeSchema(stringSchema("uuid"), "Provider configuration identifier."),
     kind: describeSchema(ref("InferenceProviderKind"), "Provider adapter kind."),
@@ -344,6 +389,9 @@ const schemas: Record<string, JsonSchema> = {
     providerId: describeSchema(stringSchema("uuid"), "Provider configuration identifier."),
     enabled: describeSchema({ type: "boolean" }, "Whether the provider can be used for inference.")
   }, ["providerId", "enabled"], "Updates provider availability."),
+  RefreshInferenceProviderModelsRequest: objectSchema({
+    providerId: describeSchema(stringSchema("uuid"), "Provider configuration identifier.")
+  }, ["providerId"], "Refreshes the models available from an inference provider."),
   UpdateInferenceModelRequest: objectSchema({
     providerId: describeSchema(stringSchema("uuid"), "Provider configuration identifier."),
     modelId: describeSchema(stringSchema(), "Provider-native model identifier."),
@@ -641,6 +689,13 @@ const operationDocs: Record<
     description:
       "Enables or disables an existing inference provider for the active organization.",
     requestDescription: "Provider identifier and enabled state.",
+    successDescription: "Updated inference configuration."
+  },
+  refreshInferenceProviderModels: {
+    summary: "Refresh inference provider models",
+    description:
+      "Re-discovers models from an existing inference provider, removes models no longer returned by the provider, and preserves availability settings for models that remain.",
+    requestDescription: "Provider identifier.",
     successDescription: "Updated inference configuration."
   },
   updateInferenceModel: {

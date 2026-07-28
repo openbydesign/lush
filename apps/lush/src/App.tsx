@@ -29,6 +29,7 @@ import {
   type Project,
   type ProjectSummary,
   openClientEvents,
+  refreshInferenceProviderModels,
   registerAccount,
   removeOrganizationMember,
   respondToOrganizationInvite,
@@ -89,6 +90,7 @@ import {
   preferNewestSessionSnapshot
 } from "./lib/chat-session-state";
 import { chatModelSelectionState } from "./lib/chat-model-selection";
+import { inferenceProviderErrorMessage } from "./lib/inference-provider-error";
 import { abortableDelay, readClientEventStream } from "./lib/client-event-stream";
 import type { Appearance, SessionStatus } from "./lib/types";
 
@@ -129,6 +131,8 @@ function useAppController() {
   const [inferenceProviderError, setInferenceProviderError] = useState("");
   const [isAddingInferenceProvider, setIsAddingInferenceProvider] =
     useState(false);
+  const [refreshingInferenceProviderId, setRefreshingInferenceProviderId] =
+    useState("");
   const [organizationName, setOrganizationNameSignal] =
     useState(getInitialOrganizationName());
   const sessionTokenRef = useRef("");
@@ -236,7 +240,7 @@ function useAppController() {
       applyInferenceConfig(config);
     } catch (error) {
       setInferenceProviderError(
-        error instanceof Error ? error.message : "Unable to update model default"
+        inferenceProviderErrorMessage(error, "Unable to update model default.")
       );
     }
   };
@@ -800,11 +804,34 @@ function useAppController() {
       applyInferenceConfig(config);
     } catch (error) {
       setInferenceProviderError(
-        error instanceof Error ? error.message : "Unable to add provider"
+        inferenceProviderErrorMessage(error, "Unable to add provider. Try again.")
       );
       throw error;
     } finally {
       setIsAddingInferenceProvider(false);
+    }
+  };
+
+  const refreshProviderModels = async (providerId: string) => {
+    setInferenceProviderError("");
+    setRefreshingInferenceProviderId(providerId);
+
+    try {
+      const config = await runAuthenticated((session) =>
+        refreshInferenceProviderModels(apiBaseUrl, session.accessToken, {
+          providerId
+        })
+      );
+      applyInferenceConfig(config);
+    } catch (error) {
+      setInferenceProviderError(
+        inferenceProviderErrorMessage(
+          error,
+          "Unable to refresh provider models. Try again."
+        )
+      );
+    } finally {
+      setRefreshingInferenceProviderId("");
     }
   };
 
@@ -824,7 +851,7 @@ function useAppController() {
       applyInferenceConfig(config);
     } catch (error) {
       setInferenceProviderError(
-        error instanceof Error ? error.message : "Unable to update provider"
+        inferenceProviderErrorMessage(error, "Unable to update provider.")
       );
     }
   };
@@ -847,7 +874,7 @@ function useAppController() {
       applyInferenceConfig(config);
     } catch (error) {
       setInferenceProviderError(
-        error instanceof Error ? error.message : "Unable to update model"
+        inferenceProviderErrorMessage(error, "Unable to update model.")
       );
     }
   };
@@ -864,7 +891,7 @@ function useAppController() {
       applyInferenceConfig(config);
     } catch (error) {
       setInferenceProviderError(
-        error instanceof Error ? error.message : "Unable to delete provider"
+        inferenceProviderErrorMessage(error, "Unable to delete provider.")
       );
     }
   };
@@ -1249,6 +1276,7 @@ function useAppController() {
     inferenceConfig,
     inferenceProviderError,
     isAddingInferenceProvider,
+    refreshingInferenceProviderId,
     authenticate,
     signOut,
     ensureSession,
@@ -1264,6 +1292,7 @@ function useAppController() {
     removeMemberFromOrganization,
     addInferenceProvider,
     setInferenceProviderEnabled,
+    refreshProviderModels,
     setInferenceModelEnabled,
     removeInferenceProvider,
     setModelDefault,

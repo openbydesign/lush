@@ -285,6 +285,7 @@ export const authzActions = [
   "fetchInferenceConfig",
   "createInferenceProvider",
   "updateInferenceProvider",
+  "refreshInferenceProviderModels",
   "updateInferenceModel",
   "deleteInferenceProvider",
   "updateInferenceModelDefault",
@@ -354,6 +355,7 @@ export const roleActionBindings: Record<UserRole, readonly AuthzAction[]> = {
     "listOrganizationInvites",
     "createInferenceProvider",
     "updateInferenceProvider",
+    "refreshInferenceProviderModels",
     "updateInferenceModel",
     "deleteInferenceProvider",
     "updateInferenceModelDefault"

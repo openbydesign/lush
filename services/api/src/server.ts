@@ -59,6 +59,7 @@ import {
   deleteInferenceProvider,
   getInferenceConfig,
   InferenceError,
+  refreshInferenceProviderModels,
   updateInferenceModelDefault,
   updateInferenceModel,
   updateInferenceProvider
@@ -832,6 +833,29 @@ app.post(routePath("updateInferenceProvider"), async (c) => {
     );
   } catch (error) {
     return handleInferenceError(c, error, "Unable to update provider");
+  }
+});
+
+app.post(routePath("refreshInferenceProviderModels"), async (c) => {
+  const authorized = await authenticateAuthorized(
+    c,
+    "refreshInferenceProviderModels"
+  );
+  if ("response" in authorized) {
+    return authorized.response;
+  }
+  const principal = organizationPrincipal(authorized.auth.principal);
+  if (!principal) {
+    return organizationRequired(c);
+  }
+
+  try {
+    const body = await c.req.json().catch(() => undefined);
+    return c.json(
+      await refreshInferenceProviderModels(principal.organizationId, body)
+    );
+  } catch (error) {
+    return handleInferenceError(c, error, "Unable to refresh provider models");
   }
 });
 
@@ -1721,12 +1745,19 @@ function handleInferenceError(
   fallbackMessage: string
 ) {
   if (error instanceof InferenceError) {
+    if (error.cause) {
+      logger.warn(
+        { err: error.cause, inferenceError: error.code },
+        fallbackMessage
+      );
+    }
     return c.json(
       { error: error.code, message: error.message },
       contentfulStatus(error.status)
     );
   }
 
+  logger.error({ err: error }, fallbackMessage);
   return c.json(
     { error: "inference_update_failed", message: fallbackMessage },
     400

@@ -10,9 +10,44 @@ export type InferenceProviderKind =
   | "openai"
   | "openai-compatible";
 
+export type InferenceModelInterface =
+  | "chat-completions"
+  | "messages"
+  | "responses"
+  | "embeddings";
+
+export type InferenceModelInputModality =
+  | "text"
+  | "image"
+  | "audio"
+  | "video"
+  | "pdf";
+
+export type InferenceModelOutputModality =
+  | "text"
+  | "image"
+  | "audio"
+  | "embedding";
+
+export type InferenceModelFeature =
+  | "tools"
+  | "structured-output"
+  | "reasoning"
+  | "citations"
+  | "code-execution"
+  | "batch";
+
+export type InferenceModelCapabilities = {
+  interfaces?: InferenceModelInterface[];
+  inputModalities?: InferenceModelInputModality[];
+  outputModalities?: InferenceModelOutputModality[];
+  features?: InferenceModelFeature[];
+};
+
 export type InferenceModelStatus = {
   id: string;
   label: string;
+  capabilities: InferenceModelCapabilities;
   enabled: boolean;
 };
 
@@ -42,6 +77,10 @@ export type AddInferenceProviderRequest = {
 export type UpdateInferenceProviderRequest = {
   providerId: string;
   enabled: boolean;
+};
+
+export type RefreshInferenceProviderModelsRequest = {
+  providerId: string;
 };
 
 export type UpdateInferenceModelRequest = {
@@ -83,6 +122,15 @@ export const inferenceRoutes = [
     method: "POST",
     path: "/inference/providers/update",
     requestType: "UpdateInferenceProviderRequest",
+    responseType: "InferenceConfig",
+    auth: true,
+    kind: "json"
+  },
+  {
+    id: "refreshInferenceProviderModels",
+    method: "POST",
+    path: "/inference/providers/refresh-models",
+    requestType: "RefreshInferenceProviderModelsRequest",
     responseType: "InferenceConfig",
     auth: true,
     kind: "json"

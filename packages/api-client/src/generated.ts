@@ -190,9 +190,44 @@ export type InferenceProviderKind =
   | "openai"
   | "openai-compatible";
 
+export type InferenceModelInterface =
+  | "chat-completions"
+  | "messages"
+  | "responses"
+  | "embeddings";
+
+export type InferenceModelInputModality =
+  | "text"
+  | "image"
+  | "audio"
+  | "video"
+  | "pdf";
+
+export type InferenceModelOutputModality =
+  | "text"
+  | "image"
+  | "audio"
+  | "embedding";
+
+export type InferenceModelFeature =
+  | "tools"
+  | "structured-output"
+  | "reasoning"
+  | "citations"
+  | "code-execution"
+  | "batch";
+
+export type InferenceModelCapabilities = {
+  interfaces?: InferenceModelInterface[];
+  inputModalities?: InferenceModelInputModality[];
+  outputModalities?: InferenceModelOutputModality[];
+  features?: InferenceModelFeature[];
+};
+
 export type InferenceModelStatus = {
   id: string;
   label: string;
+  capabilities: InferenceModelCapabilities;
   enabled: boolean;
 };
 
@@ -222,6 +257,10 @@ export type AddInferenceProviderRequest = {
 export type UpdateInferenceProviderRequest = {
   providerId: string;
   enabled: boolean;
+};
+
+export type RefreshInferenceProviderModelsRequest = {
+  providerId: string;
 };
 
 export type UpdateInferenceModelRequest = {
@@ -655,6 +694,15 @@ export const apiRoutes = [
     "kind": "json"
   },
   {
+    "id": "refreshInferenceProviderModels",
+    "method": "POST",
+    "path": "/v1beta/inference/providers/refresh-models",
+    "requestType": "RefreshInferenceProviderModelsRequest",
+    "responseType": "InferenceConfig",
+    "auth": true,
+    "kind": "json"
+  },
+  {
     "id": "updateInferenceModel",
     "method": "POST",
     "path": "/v1beta/inference/models/update",
@@ -874,6 +922,7 @@ const RESPOND_TO_ORGANIZATION_INVITE_ROUTE = apiRoutes.find((route) => route.id 
 const FETCH_INFERENCE_CONFIG_ROUTE = apiRoutes.find((route) => route.id === "fetchInferenceConfig")!;
 const CREATE_INFERENCE_PROVIDER_ROUTE = apiRoutes.find((route) => route.id === "createInferenceProvider")!;
 const UPDATE_INFERENCE_PROVIDER_ROUTE = apiRoutes.find((route) => route.id === "updateInferenceProvider")!;
+const REFRESH_INFERENCE_PROVIDER_MODELS_ROUTE = apiRoutes.find((route) => route.id === "refreshInferenceProviderModels")!;
 const UPDATE_INFERENCE_MODEL_ROUTE = apiRoutes.find((route) => route.id === "updateInferenceModel")!;
 const DELETE_INFERENCE_PROVIDER_ROUTE = apiRoutes.find((route) => route.id === "deleteInferenceProvider")!;
 const UPDATE_INFERENCE_MODEL_DEFAULT_ROUTE = apiRoutes.find((route) => route.id === "updateInferenceModelDefault")!;
@@ -1460,6 +1509,27 @@ export async function updateInferenceProvider(
 
   if (!response.ok) {
     throw await apiError("updateInferenceProvider", response);
+  }
+
+  return response.json() as Promise<InferenceConfig>;
+}
+
+export async function refreshInferenceProviderModels(
+  apiBaseUrl: string,
+  sessionToken: string | undefined, body: RefreshInferenceProviderModelsRequest
+) {
+  const response = await fetch(apiUrl(apiBaseUrl, REFRESH_INFERENCE_PROVIDER_MODELS_ROUTE.path), {
+    method: "POST",
+    credentials: "include",
+    headers: {
+      ...authorizationHeaders(sessionToken),
+      "content-type": "application/json"
+    },
+    body: JSON.stringify(body)
+  });
+
+  if (!response.ok) {
+    throw await apiError("refreshInferenceProviderModels", response);
   }
 
   return response.json() as Promise<InferenceConfig>;
