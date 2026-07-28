@@ -1479,6 +1479,80 @@
           }
         }
       },
+      "InferenceModelInterface": {
+        "type": "string",
+        "enum": [
+          "chat-completions",
+          "messages",
+          "responses",
+          "embeddings"
+        ]
+      },
+      "InferenceModelInputModality": {
+        "type": "string",
+        "enum": [
+          "text",
+          "image",
+          "audio",
+          "video",
+          "pdf"
+        ]
+      },
+      "InferenceModelOutputModality": {
+        "type": "string",
+        "enum": [
+          "text",
+          "image",
+          "audio",
+          "embedding"
+        ]
+      },
+      "InferenceModelFeature": {
+        "type": "string",
+        "enum": [
+          "tools",
+          "structured-output",
+          "reasoning",
+          "citations",
+          "code-execution",
+          "batch"
+        ]
+      },
+      "InferenceModelCapabilities": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Partial capability facts. Omitted fields are unknown, not unsupported.",
+        "properties": {
+          "interfaces": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InferenceModelInterface"
+            },
+            "description": "Provider interfaces known to accept this model."
+          },
+          "inputModalities": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InferenceModelInputModality"
+            },
+            "description": "Input modalities positively identified for this model."
+          },
+          "outputModalities": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InferenceModelOutputModality"
+            },
+            "description": "Output modalities positively identified for this model."
+          },
+          "features": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InferenceModelFeature"
+            },
+            "description": "Optional model features positively identified by the provider."
+          }
+        }
+      },
       "InferenceModelStatus": {
         "type": "object",
         "additionalProperties": false,
@@ -1492,6 +1566,10 @@
             "type": "string",
             "description": "Display label for the model."
           },
+          "capabilities": {
+            "$ref": "#/components/schemas/InferenceModelCapabilities",
+            "description": "Provider-reported or provider-contract model capabilities."
+          },
           "enabled": {
             "type": "boolean",
             "description": "Whether users can select this model."
@@ -1500,6 +1578,7 @@
         "required": [
           "id",
           "label",
+          "capabilities",
           "enabled"
         ]
       },
@@ -1627,6 +1706,21 @@
         "required": [
           "providerId",
           "enabled"
+        ]
+      },
+      "RefreshInferenceProviderModelsRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Refreshes the models available from an inference provider.",
+        "properties": {
+          "providerId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Provider configuration identifier."
+          }
+        },
+        "required": [
+          "providerId"
         ]
       },
       "UpdateInferenceModelRequest": {

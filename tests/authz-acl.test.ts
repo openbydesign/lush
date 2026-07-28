@@ -44,6 +44,7 @@ test("role action bindings keep users read-only for organization and inference s
   expect(roleActionBindings.user).toContain("truncateSession");
   expect(roleActionBindings.user).not.toContain("updateCurrentOrganization");
   expect(roleActionBindings.user).not.toContain("createInferenceProvider");
+  expect(roleActionBindings.user).not.toContain("refreshInferenceProviderModels");
   expect(roleActionBindings.user).not.toContain("updateInferenceModelDefault");
   expect(roleActionBindings.user).not.toContain("updateSessionSettings");
 });
@@ -66,6 +67,9 @@ test("authorizePrincipal allows user read actions and rejects management actions
     authorizePrincipal(basePrincipal, "createInferenceProvider")
   ).toThrow(AuthError);
   expect(() =>
+    authorizePrincipal(basePrincipal, "refreshInferenceProviderModels")
+  ).toThrow(AuthError);
+  expect(() =>
     authorizePrincipal(basePrincipal, "updateSessionSettings")
   ).toThrow(AuthError);
 });
@@ -82,6 +86,9 @@ test("authorizePrincipal allows admin organization and inference management acti
   expect(authorizePrincipal(adminPrincipal, "createInferenceProvider").allowed).toBe(
     true
   );
+  expect(
+    authorizePrincipal(adminPrincipal, "refreshInferenceProviderModels").allowed
+  ).toBe(true);
   expect(
     authorizePrincipal(adminPrincipal, "updateInferenceModelDefault").allowed
   ).toBe(true);

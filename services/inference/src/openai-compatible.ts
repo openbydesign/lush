@@ -1,3 +1,5 @@
+import type { InferenceModelCapabilities } from "@lush/db/schema";
+
 export type ChatRole = "system" | "user" | "assistant";
 
 export type ChatMessage = {
@@ -14,8 +16,13 @@ export type ProviderConfig = {
 export type DiscoveredModel = {
   id: string;
   label: string;
+  capabilities: InferenceModelCapabilities;
   enabled: boolean;
 };
+
+export type ModelCapabilityResolver = (
+  model: Record<string, unknown>
+) => InferenceModelCapabilities;
 
 export async function* streamOpenAICompatibleChat(
   config: ProviderConfig,
@@ -88,20 +95,26 @@ function parseStreamLine(line: string) {
   }
 }
 
-export async function discoverOpenAICompatibleModels(provider: {
-  baseUrl: string;
-  apiKey: string;
-}) {
+export async function discoverOpenAICompatibleModels(
+  provider: {
+    baseUrl: string;
+    apiKey: string;
+  },
+  capabilitiesForModel?: ModelCapabilityResolver
+) {
   const response = await fetch(`${provider.baseUrl}/models`, {
     headers: {
       authorization: `Bearer ${provider.apiKey}`
     }
   });
 
-  return parseModelDiscoveryResponse(response);
+  return parseModelDiscoveryResponse(response, capabilitiesForModel);
 }
 
-export async function parseModelDiscoveryResponse(response: Response) {
+export async function parseModelDiscoveryResponse(
+  response: Response,
+  capabilitiesForModel: ModelCapabilityResolver = () => ({})
+) {
   if (!response.ok) {
     const text = await response.text().catch(() => "");
     throw new Error(
@@ -115,18 +128,20 @@ export async function parseModelDiscoveryResponse(response: Response) {
       ? (body as { data: unknown[] }).data
       : [];
   const models = data
-    .map((model) => normalizeDiscoveredModel(model))
+    .map((model) => normalizeDiscoveredModel(model, capabilitiesForModel))
     .filter((model): model is DiscoveredModel => Boolean(model));
 
   if (models.length === 0) {
     throw new Error("No models were returned by the provider.");
   }
 
-  const likelyChatModels = models.filter((model) => isLikelyChatModel(model.id));
-  return likelyChatModels.length > 0 ? likelyChatModels : models;
+  return models;
 }
 
-function normalizeDiscoveredModel(model: unknown) {
+function normalizeDiscoveredModel(
+  model: unknown,
+  capabilitiesForModel: ModelCapabilityResolver
+) {
   if (!model || typeof model !== "object") {
     return undefined;
   }
@@ -140,19 +155,16 @@ function normalizeDiscoveredModel(model: unknown) {
   const label =
     typeof candidate.display_name === "string"
       ? candidate.display_name
-      : typeof candidate.name === "string"
-        ? candidate.name
-        : id;
+      : typeof candidate.displayName === "string"
+        ? candidate.displayName
+        : typeof candidate.name === "string"
+          ? candidate.name
+          : id;
 
   return {
     id,
     label,
+    capabilities: capabilitiesForModel(candidate),
     enabled: false
   };
-}
-
-function isLikelyChatModel(id: string) {
-  return /chat|gpt|o\d|claude|llama|qwen|deepseek|glm|mistral|mixtral|sonnet|haiku|opus/i.test(
-    id
-  );
 }
