@@ -83,8 +83,8 @@ from the requested tag commit. A release tag must never move to another commit.
 
 Each release publishes multi-platform `linux/amd64` and `linux/arm64` images:
 
-- `ghcr.io/lush-agents/lush-api:<version>`
-- `ghcr.io/lush-agents/lush-web:<version>`
+- `ghcr.io/openbydesign/lush-api:<version>`
+- `ghcr.io/openbydesign/lush-web:<version>`
 
 Stable releases also update `latest`. Prereleases do not. Production and
 managed deployments should pin an exact version or, preferably, the published
@@ -110,20 +110,20 @@ Download and verify all three assets before extracting the archive:
 ```sh
 version=0.1.0
 gh release download "v$version" \
-  --repo lush-agents/lush \
+  --repo openbydesign/lush \
   --pattern "lush-web-dist-$version*"
-source_digest="$(gh api "repos/lush-agents/lush/commits/v$version" --jq .sha)"
+source_digest="$(gh api "repos/openbydesign/lush/commits/v$version" --jq .sha)"
 sha256sum --check "lush-web-dist-$version.tar.gz.sha256"
 gh attestation verify "lush-web-dist-$version.tar.gz" \
-  --repo lush-agents/lush \
+  --repo openbydesign/lush \
   --bundle "lush-web-dist-$version.intoto.jsonl" \
   --source-digest "$source_digest" \
-  --signer-workflow lush-agents/lush/.github/workflows/publish-images.yml
+  --signer-workflow openbydesign/lush/.github/workflows/publish-images.yml
 gh attestation verify "lush-web-dist-$version.tar.gz.sha256" \
-  --repo lush-agents/lush \
+  --repo openbydesign/lush \
   --bundle "lush-web-dist-$version.intoto.jsonl" \
   --source-digest "$source_digest" \
-  --signer-workflow lush-agents/lush/.github/workflows/publish-images.yml
+  --signer-workflow openbydesign/lush/.github/workflows/publish-images.yml
 ```
 
 Changing either the archive or checksum makes this sequence fail. The checksum

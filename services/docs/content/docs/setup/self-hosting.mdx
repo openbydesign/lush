@@ -108,7 +108,7 @@ Generate the JWT signing key with the exact API image being deployed:
 
 ```sh
 docker run --rm \
-  ghcr.io/lush-agents/lush-api:<version> \
+  ghcr.io/openbydesign/lush-api:<version> \
   bun run auth:keygen
 ```
 
@@ -206,7 +206,7 @@ managed PostgreSQL service:
 ```sh
 docker run --rm \
   --env DATABASE_URL \
-  ghcr.io/lush-agents/lush-api:<version> \
+  ghcr.io/openbydesign/lush-api:<version> \
   bun run db:migrate
 ```
 

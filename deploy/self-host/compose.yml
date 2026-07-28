@@ -19,7 +19,7 @@ services:
       - data
 
   migrate:
-    image: ghcr.io/lush-agents/lush-api:${LUSH_IMAGE_VERSION:?set LUSH_IMAGE_VERSION in deploy/self-host/.env}
+    image: ghcr.io/openbydesign/lush-api:${LUSH_IMAGE_VERSION:?set LUSH_IMAGE_VERSION in deploy/self-host/.env}
     restart: "no"
     command: ["bun", "run", "db:migrate"]
     environment:
@@ -31,7 +31,7 @@ services:
       - data
 
   api:
-    image: ghcr.io/lush-agents/lush-api:${LUSH_IMAGE_VERSION:?set LUSH_IMAGE_VERSION in deploy/self-host/.env}
+    image: ghcr.io/openbydesign/lush-api:${LUSH_IMAGE_VERSION:?set LUSH_IMAGE_VERSION in deploy/self-host/.env}
     restart: unless-stopped
     env_file: ${LUSH_API_ENV_FILE:-.env}
     depends_on:
@@ -44,7 +44,7 @@ services:
       - edge
 
   web:
-    image: ghcr.io/lush-agents/lush-web:${LUSH_IMAGE_VERSION:?set LUSH_IMAGE_VERSION in deploy/self-host/.env}
+    image: ghcr.io/openbydesign/lush-web:${LUSH_IMAGE_VERSION:?set LUSH_IMAGE_VERSION in deploy/self-host/.env}
     restart: unless-stopped
     environment:
       LUSH_API_URL: ""
