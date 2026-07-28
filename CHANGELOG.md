@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.3.0](https://github.com/openbydesign/lush/compare/v0.2.0...v0.3.0) (2026-07-28)
+
+
+### Features
+
+* **inference:** improve enumeration & capabilities ([#94](https://github.com/openbydesign/lush/issues/94)) ([de49f9a](https://github.com/openbydesign/lush/commit/de49f9a6363db8af2622ca09884da2762671a71c))
+
+
+### Bug Fixes
+
+* **code:** remove the --token argv fallback ([#93](https://github.com/openbydesign/lush/issues/93)) ([a862e9a](https://github.com/openbydesign/lush/commit/a862e9a15c63b400693424a6e8f6ac4fa8d1a842))
+
+
+### Performance Improvements
+
+* **code:** reuse the harness probe from session start ([#92](https://github.com/openbydesign/lush/issues/92)) ([e5bb1a8](https://github.com/openbydesign/lush/commit/e5bb1a85252b92ad68e4a5b98ef41affd10b63ae))
+
 ## [0.2.0](https://github.com/lush-agents/lush/compare/v0.1.2...v0.2.0) (2026-07-20)
 
 
