@@ -1,5 +1,5 @@
 import type { AutonomyMode, HarnessCapabilities, HarnessEventInput } from "@lush/code";
-import { number, parseJsonLine, probeHarness, record, runStructuredAdapter, text } from "./shared";
+import { number, parseJsonLine, probeHarness, record, resolveInstallation, runStructuredAdapter, text } from "./shared";
 import type { AdapterRunOptions, CodingHarnessAdapter, HarnessLineParser } from "./types";
 
 const capabilities: HarnessCapabilities = {
@@ -26,7 +26,7 @@ export class OpenCodeAdapter implements CodingHarnessAdapter {
 
   run(options: AdapterRunOptions) {
     let interrupt = () => {};
-    const deferred = this.probe().then((installation) => {
+    const deferred = resolveInstallation(options, () => this.probe()).then((installation) => {
       if (installation.status !== "installed" || !installation.executable || !installation.version) {
         throw new Error(installation.detail ?? "OpenCode is unavailable");
       }
