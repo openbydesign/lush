@@ -144,14 +144,15 @@ export class LocalCodeOrchestrator {
     const candidate = Number.isFinite(after) ? Math.max(0, Math.floor(after)) : 0;
     const cursor = candidate <= lastSequence ? candidate : 0;
     const events = session.events.filter((event) => event.sequence > cursor);
-    // Only the delta plus the fields a poller cannot derive from it: the
-    // reconstructed messages and the session status. Returning the whole
-    // session here made this endpoint as heavy as GET /v1/sessions/:id.
+    // Only the delta plus fields a poller cannot derive from it: reconstructed
+    // messages, session status and a terminal error. Returning the whole session
+    // here made this endpoint as heavy as GET /v1/sessions/:id.
     return {
       events,
       nextCursor: lastSequence,
       status: session.status,
-      messages: session.messages
+      messages: session.messages,
+      error: session.error
     };
   }
 

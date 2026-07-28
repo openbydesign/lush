@@ -4,7 +4,7 @@ import { closeSync, openSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import type { CodeSession, HarnessEvent } from "@lush/code";
+import type { CodeSession, EventPage, HarnessEvent } from "@lush/code";
 import { startCodeSidecar } from "../services/agent/src/code/server";
 import { CodeSessionStore } from "../services/agent/src/code/store";
 
@@ -172,13 +172,24 @@ test("event cursor stays live as sessions append after empty and at-tail polls",
   });
 });
 
+test("event cursor reports terminal session errors", async () => {
+  await withSeededSidecar(async (_poll, _appendEvent, loadPage) => {
+    expect(await loadPage(failed, "0")).toMatchObject({
+      status: "failed",
+      error: "Harness process exited with code 1"
+    });
+  });
+});
+
 const populated = "11111111-1111-4111-8111-111111111111";
 const empty = "22222222-2222-4222-8222-222222222222";
+const failed = "33333333-3333-4333-8333-333333333333";
 
 async function withSeededSidecar(
   assertions: (
     poll: (id: string, after: string) => Promise<{ sequences: number[]; nextCursor: unknown }>,
-    appendEvent: (id: string) => Promise<void>
+    appendEvent: (id: string) => Promise<void>,
+    loadPage: (id: string, after: string) => Promise<EventPage>
   ) => Promise<void>
 ) {
   const stateDirectory = await mkdtemp(path.join(tmpdir(), "lush-code-cursor-"));
@@ -186,17 +197,25 @@ async function withSeededSidecar(
   const store = new CodeSessionStore(stateDirectory);
   await store.put(sessionFixture(populated, 3));
   await store.put(sessionFixture(empty, 0));
+  await store.put({
+    ...sessionFixture(failed, 0),
+    status: "failed",
+    error: "Harness process exited with code 1"
+  });
 
   const server = startCodeSidecar({ token, stateDirectory });
   const baseUrl = `http://${server.hostname}:${server.port}`;
 
   try {
-    const poll = async (id: string, after: string) => {
+    const loadPage = async (id: string, after: string) => {
       const response = await fetch(`${baseUrl}/v1/sessions/${id}/events?after=${after}`, {
         headers: { authorization: `Bearer ${token}` }
       });
       expect(response.status).toBe(200);
-      const page = await response.json() as { events: HarnessEvent[]; nextCursor: unknown };
+      return response.json() as Promise<EventPage>;
+    };
+    const poll = async (id: string, after: string) => {
+      const page = await loadPage(id, after);
       return { sequences: page.events.map((event) => event.sequence), nextCursor: page.nextCursor };
     };
     const appendEvent = async (id: string) => {
@@ -215,7 +234,7 @@ async function withSeededSidecar(
       });
       await store.put(session);
     };
-    await assertions(poll, appendEvent);
+    await assertions(poll, appendEvent, loadPage);
   } finally {
     server.stop(true);
     await rm(stateDirectory, { recursive: true, force: true });

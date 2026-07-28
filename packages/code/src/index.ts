@@ -166,6 +166,7 @@ export type EventPage = {
   nextCursor: number;
   status: CodeSessionStatus;
   messages: CodeMessage[];
+  error?: string;
 };
 
 export type CodeReviewCommit = {
