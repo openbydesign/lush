@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.1](https://github.com/openbydesign/lush/compare/v0.3.0...v0.3.1) (2026-07-28)
+
+
+### Bug Fixes
+
+* **release:** publish images under repository owner ([#96](https://github.com/openbydesign/lush/issues/96)) ([791d4ae](https://github.com/openbydesign/lush/commit/791d4ae5c5700eae16b92287e5be45df020e90b5))
+
 ## [0.3.0](https://github.com/openbydesign/lush/compare/v0.2.0...v0.3.0) (2026-07-28)
 
 
