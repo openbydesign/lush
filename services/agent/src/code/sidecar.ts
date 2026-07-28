@@ -9,8 +9,8 @@ const argumentsMap = new Map(
     return separator < 0 ? [argument, ""] : [argument.slice(0, separator), argument.slice(separator + 1)];
   })
 );
-const token = argumentsMap.get("--token") || (await readFile("/dev/stdin", "utf8")).trim();
-if (!token) throw new Error("--token is required");
+const token = (await readFile("/dev/stdin", "utf8")).trim();
+if (!token) throw new Error("A capability token is required on stdin");
 const stateDirectory = argumentsMap.get("--state-dir") || path.join(homedir(), ".lush", "code", "sessions");
 const port = Number(argumentsMap.get("--port") || 0);
 const server = startCodeSidecar({ token, stateDirectory, port });

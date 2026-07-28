@@ -1,5 +1,5 @@
 import type { AutonomyMode, HarnessCapabilities, HarnessEventInput } from "@lush/code";
-import { number, parseJsonLine, probeHarness, record, runStructuredAdapter, text } from "./shared";
+import { number, parseJsonLine, probeHarness, record, resolveInstallation, runStructuredAdapter, text } from "./shared";
 import type { AdapterRunOptions, CodingHarnessAdapter, HarnessLineParser } from "./types";
 
 const capabilities: HarnessCapabilities = {
@@ -36,7 +36,7 @@ export class CodexAdapter implements CodingHarnessAdapter {
   }
 
   run(options: AdapterRunOptions) {
-    const installationPromise = this.probe();
+    const installationPromise = resolveInstallation(options, () => this.probe());
     let interrupt = () => {};
     const deferred = installationPromise.then((installation) => {
       if (installation.status !== "installed" || !installation.executable || !installation.version) {

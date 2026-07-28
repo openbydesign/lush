@@ -253,8 +253,10 @@ function InferenceSettingsRoute() {
       modelDefaults={app.modelDefaults}
       inferenceProviderError={app.inferenceProviderError}
       isAddingInferenceProvider={app.isAddingInferenceProvider}
+      refreshingInferenceProviderId={app.refreshingInferenceProviderId}
       onAddInferenceProvider={app.addInferenceProvider}
       onProviderEnabledChange={app.setInferenceProviderEnabled}
+      onProviderModelsRefresh={app.refreshProviderModels}
       onProviderDelete={app.removeInferenceProvider}
       onModelEnabledChange={app.setInferenceModelEnabled}
       onModelDefaultChange={app.setModelDefault}

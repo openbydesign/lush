@@ -20,8 +20,18 @@ test("database migration ids match their ordinal prefix", () => {
     "007_auth_action_tokens",
     "008_session_ip_retention",
     "009_session_ip_columns",
-    "010_organization_invite_tokens"
+    "010_organization_invite_tokens",
+    "011_inference_model_capabilities"
   ]);
+});
+
+test("model capabilities are added append-only as structured JSON", async () => {
+  const migration = await Bun.file(
+    "packages/db/src/migrations/011_inference_model_capabilities.ts"
+  ).text();
+
+  expect(migration).toContain("add column if not exists capabilities jsonb");
+  expect(migration).toContain("not null default '{}'::jsonb");
 });
 
 test("organization invite tokens are hashed, required, and unique", async () => {

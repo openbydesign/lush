@@ -76,6 +76,19 @@ export function validateHelpSurface(helpOutput: string, requiredTokens: string[]
   return requiredTokens.filter((token) => !helpOutput.includes(token));
 }
 
+/**
+ * Reuse the caller's qualification result when it supplied one, otherwise
+ * probe. `startSession` already probes before it creates the session, so
+ * passing that result through leaves one probe per session start instead of
+ * two.
+ */
+export function resolveInstallation(
+  options: AdapterRunOptions,
+  probe: () => Promise<HarnessInstallation>
+): Promise<HarnessInstallation> {
+  return options.installation ? Promise.resolve(options.installation) : probe();
+}
+
 export function runStructuredAdapter(options: {
   adapterId: HarnessId;
   executable: string;

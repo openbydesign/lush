@@ -1,4 +1,9 @@
+import type { InferenceModelCapabilities } from "@lush/db/schema";
 import { parseModelDiscoveryResponse } from "../openai-compatible";
+import {
+  compactCapabilities,
+  mergeModelCapabilities
+} from "../model-capabilities";
 import type {
   InferenceProviderAdapter,
   ProviderConnection,
@@ -14,7 +19,10 @@ export const anthropicAdapter: InferenceProviderAdapter = {
       }
     });
 
-    return parseModelDiscoveryResponse(response);
+    return parseModelDiscoveryResponse(
+      response,
+      anthropicCapabilitiesFromModel
+    );
   },
 
   async *streamChat(options: StreamProviderChatOptions) {
@@ -45,6 +53,48 @@ export const anthropicAdapter: InferenceProviderAdapter = {
     yield* streamAnthropicText(response.body);
   }
 };
+
+export function anthropicCapabilitiesFromModel(
+  model: Record<string, unknown>
+): InferenceModelCapabilities {
+  const capabilities =
+    model.capabilities && typeof model.capabilities === "object"
+      ? (model.capabilities as Record<string, unknown>)
+      : {};
+
+  return mergeModelCapabilities(
+    {
+      interfaces: ["messages"],
+      inputModalities: ["text"],
+      outputModalities: ["text"]
+    },
+    compactCapabilities({
+      inputModalities: [
+        ...(isSupported(capabilities.image_input) ? (["image"] as const) : []),
+        ...(isSupported(capabilities.pdf_input) ? (["pdf"] as const) : [])
+      ],
+      features: [
+        ...(isSupported(capabilities.structured_outputs)
+          ? (["structured-output"] as const)
+          : []),
+        ...(isSupported(capabilities.thinking) ? (["reasoning"] as const) : []),
+        ...(isSupported(capabilities.citations) ? (["citations"] as const) : []),
+        ...(isSupported(capabilities.code_execution)
+          ? (["code-execution"] as const)
+          : []),
+        ...(isSupported(capabilities.batch) ? (["batch"] as const) : [])
+      ]
+    })
+  );
+}
+
+function isSupported(value: unknown) {
+  return (
+    Boolean(value) &&
+    typeof value === "object" &&
+    (value as { supported?: unknown }).supported === true
+  );
+}
 
 async function* streamAnthropicText(body: ReadableStream<Uint8Array>) {
   const reader = body.getReader();

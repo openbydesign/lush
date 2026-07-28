@@ -56,6 +56,7 @@ export function InferenceSettingsPage(props: {
   modelDefaults: ModelDefaults;
   inferenceProviderError: string;
   isAddingInferenceProvider: boolean;
+  refreshingInferenceProviderId: string;
   onAddInferenceProvider: (
     request: AddInferenceProviderRequest
   ) => Promise<unknown>;
@@ -63,6 +64,7 @@ export function InferenceSettingsPage(props: {
     providerId: string,
     enabled: boolean
   ) => Promise<unknown>;
+  onProviderModelsRefresh: (providerId: string) => Promise<unknown>;
   onProviderDelete: (providerId: string) => Promise<unknown>;
   onModelEnabledChange: (
     providerId: string,
@@ -233,12 +235,6 @@ export function InferenceSettingsPage(props: {
                 </label>
               </div>
 
-              {props.inferenceProviderError ? (
-                <p className="text-sm text-[var(--color-brand-soft)]">
-                  {props.inferenceProviderError}
-                </p>
-              ) : null}
-
               <div className="flex items-center justify-end gap-2">
                 <button
                   type="button"
@@ -263,6 +259,15 @@ export function InferenceSettingsPage(props: {
                 </button>
               </div>
             </form>
+          ) : null}
+
+          {props.inferenceProviderError ? (
+            <p
+              role="alert"
+              className="rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-600 dark:text-red-300"
+            >
+              {props.inferenceProviderError}
+            </p>
           ) : null}
 
           <div className="grid gap-2">
@@ -307,6 +312,21 @@ export function InferenceSettingsPage(props: {
                             </span>
                             {isAdmin ? (
                               <>
+                                <button
+                                  type="button"
+                                  disabled={Boolean(
+                                    props.refreshingInferenceProviderId
+                                  )}
+                                  onClick={() =>
+                                    void props.onProviderModelsRefresh(provider.id)
+                                  }
+                                  className="rounded-md border border-[var(--color-border)] px-2 py-1 text-xs font-medium text-[var(--color-muted)] transition hover:border-[var(--color-border-strong)] hover:bg-[var(--color-panel-hover)] hover:text-[var(--color-text)] disabled:cursor-not-allowed disabled:opacity-50"
+                                >
+                                  {props.refreshingInferenceProviderId ===
+                                  provider.id
+                                    ? "Refreshing..."
+                                    : "Refresh models"}
+                                </button>
                                 <ToggleSwitch
                                 checked={provider.enabled}
                                 label={`${provider.enabled ? "Disable" : "Enable"} ${provider.label}`}

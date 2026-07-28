@@ -6,6 +6,7 @@ import type {
   HarnessEvent,
   HarnessEventInput,
   HarnessId,
+  HarnessInstallation,
   SendCodeInputRequest,
   StartCodeSessionRequest
 } from "@lush/code";
@@ -78,7 +79,7 @@ export class LocalCodeOrchestrator {
     };
 
     await this.store.put(session);
-    this.runTurn(session, request.input.trim(), turnId);
+    this.runTurn(session, request.input.trim(), turnId, installation);
     return session;
   }
 
@@ -165,7 +166,7 @@ export class LocalCodeOrchestrator {
     await Promise.allSettled(runs.map((run) => run.completed));
   }
 
-  private runTurn(session: CodeSession, prompt: string, turnId: string) {
+  private runTurn(session: CodeSession, prompt: string, turnId: string, installation?: HarnessInstallation) {
     const adapter = requireAdapter(session.harnessId);
     const promptMessage = session.messages.find((message) => message.turnId === turnId && message.role === "user");
     void this.appendEvent(session, turnId, {
@@ -179,6 +180,7 @@ export class LocalCodeOrchestrator {
       model: session.draft.model,
       autonomy: session.effectiveAutonomy,
       binding: session.binding,
+      installation,
       emit: (event) => { void this.appendEvent(session, turnId, event); }
     });
     this.activeRuns.set(session.id, run);
