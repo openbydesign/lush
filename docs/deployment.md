@@ -16,7 +16,7 @@ the lower-level image contract for deployment implementations.
 
 ### `lush-api`
 
-`ghcr.io/lush-agents/lush-api:<version>` runs the public API on port `7330` as
+`ghcr.io/openbydesign/lush-api:<version>` runs the public API on port `7330` as
 an unprivileged user. It also contains the database migration command, keeping
 schema changes and application code on the same release coordinate.
 
@@ -25,7 +25,7 @@ Run migrations as a release job before starting the new API version:
 ```sh
 docker run --rm \
   --env DATABASE_URL \
-  ghcr.io/lush-agents/lush-api:0.1.0 \
+  ghcr.io/openbydesign/lush-api:0.1.0 \
   bun run db:migrate
 ```
 
@@ -40,7 +40,7 @@ must ship as an explicit expand/migrate/contract sequence across releases.
 
 ### `lush-web`
 
-`ghcr.io/lush-agents/lush-web:<version>` serves the browser app as an
+`ghcr.io/openbydesign/lush-web:<version>` serves the browser app as an
 unprivileged user on port `8080`. It is a topology-neutral static origin: it
 serves built assets, SPA fallbacks, `GET /healthz`, and runtime browser
 configuration, but it never proxies API traffic. Deployments terminate TLS and

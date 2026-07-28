@@ -15,7 +15,7 @@ ARG REVISION=unknown
 
 LABEL org.opencontainers.image.title="Lush API" \
       org.opencontainers.image.description="Open control plane for multi-model AI applications and agent runtimes" \
-      org.opencontainers.image.source="https://github.com/lush-agents/lush" \
+      org.opencontainers.image.source="https://github.com/openbydesign/lush" \
       org.opencontainers.image.licenses="Apache-2.0" \
       org.opencontainers.image.version="${VERSION}" \
       org.opencontainers.image.revision="${REVISION}"

@@ -103,6 +103,22 @@ describe("workflow security invariants", () => {
     expect(publishWorkflow).toContain(
       '"$GITHUB_EVENT_NAME" == "workflow_dispatch" && "$GITHUB_SHA" != "$tag_commit"'
     );
+    expect(publishWorkflow).toContain(
+      "images: ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}"
+    );
+    expect(publishWorkflow).toContain(
+      "subject-name: ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}"
+    );
+    expect(publishWorkflow).not.toContain("ghcr.io/lush-agents/");
+
+    for (const path of [
+      "deploy/self-host/compose.yml",
+      "docs/deployment.md",
+      "docs/releases.md",
+      "services/docs/content/docs/setup/self-hosting.mdx"
+    ]) {
+      expect(await Bun.file(path).text()).not.toContain("ghcr.io/lush-agents/");
+    }
 
     const releaseWorkflow = await Bun.file(".github/workflows/release.yml").text();
     expect(releaseWorkflow).toMatch(/^permissions:\n  contents: read\n\njobs:/m);
