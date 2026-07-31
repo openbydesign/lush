@@ -85,6 +85,17 @@ import {
   updateSession
 } from "@lush/sessions/runtime";
 import {
+  createToolConnection,
+  deleteToolConnection,
+  discoverConnectionCatalog,
+  listToolConnections,
+  listToolDefinitions,
+  updateToolConnection,
+  ToolError,
+  type ToolsPrincipal
+} from "@lush/tools/runtime";
+import { decideToolApproval, invokeTool } from "@lush/tools/gateway";
+import {
   ConfigError,
   envSchema,
   readEnvSchema
@@ -327,6 +338,22 @@ function projectIdParam(c: Context) {
 
 function contextIdParam(c: Context) {
   return c.req.param("contextId") ?? "";
+}
+
+function connectionIdParam(c: Context) {
+  return c.req.param("connectionId") ?? "";
+}
+
+function approvalIdParam(c: Context) {
+  return c.req.param("approvalId") ?? "";
+}
+
+function toolsPrincipal(principal: OrganizationPrincipal): ToolsPrincipal {
+  return {
+    userId: principal.userId,
+    organizationId: principal.organizationId,
+    role: principal.role
+  };
 }
 
 app.post(routePath("registerAccount"), async (c) => {
@@ -1087,6 +1114,151 @@ app.patch(routePath("updateSessionSettings"), async (c) => {
   }
 });
 
+app.get(routePath("listToolConnections"), async (c) => {
+  const authorized = await authenticateAuthorized(c, "listToolConnections");
+  if ("response" in authorized) return authorized.response;
+  const principal = organizationPrincipal(authorized.auth.principal);
+  if (!principal) return organizationRequired(c);
+
+  try {
+    const connections = await listToolConnections(toolsPrincipal(principal));
+    return c.json({ connections });
+  } catch (error) {
+    return handleToolError(c, error, "Unable to list tool connections");
+  }
+});
+
+app.post(routePath("createToolConnection"), async (c) => {
+  const authorized = await authenticateAuthorized(c, "createToolConnection");
+  if ("response" in authorized) return authorized.response;
+  const principal = organizationPrincipal(authorized.auth.principal);
+  if (!principal) return organizationRequired(c);
+
+  try {
+    const body = await c.req.json().catch(() => ({}));
+    return c.json(await createToolConnection(toolsPrincipal(principal), body));
+  } catch (error) {
+    return handleToolError(c, error, "Unable to create tool connection");
+  }
+});
+
+app.post(routePath("updateToolConnection"), async (c) => {
+  const authorized = await authenticateAuthorized(c, "updateToolConnection");
+  if ("response" in authorized) return authorized.response;
+  const principal = organizationPrincipal(authorized.auth.principal);
+  if (!principal) return organizationRequired(c);
+
+  try {
+    const body = await c.req.json().catch(() => ({}));
+    return c.json(await updateToolConnection(toolsPrincipal(principal), body));
+  } catch (error) {
+    return handleToolError(c, error, "Unable to update tool connection");
+  }
+});
+
+app.post(routePath("deleteToolConnection"), async (c) => {
+  const authorized = await authenticateAuthorized(c, "deleteToolConnection");
+  if ("response" in authorized) return authorized.response;
+  const principal = organizationPrincipal(authorized.auth.principal);
+  if (!principal) return organizationRequired(c);
+
+  try {
+    const body = await c.req.json().catch(() => undefined);
+    const connectionId =
+      (body as { connectionId?: string } | undefined)?.connectionId ?? "";
+    return c.json(await deleteToolConnection(toolsPrincipal(principal), connectionId));
+  } catch (error) {
+    return handleToolError(c, error, "Unable to delete tool connection");
+  }
+});
+
+app.get(routePath("listToolDefinitions"), async (c) => {
+  const authorized = await authenticateAuthorized(c, "listToolDefinitions");
+  if ("response" in authorized) return authorized.response;
+  const principal = organizationPrincipal(authorized.auth.principal);
+  if (!principal) return organizationRequired(c);
+
+  try {
+    const definitions = await listToolDefinitions(
+      toolsPrincipal(principal),
+      connectionIdParam(c)
+    );
+    return c.json({ definitions });
+  } catch (error) {
+    return handleToolError(c, error, "Unable to list tool definitions");
+  }
+});
+
+app.post(routePath("discoverToolCatalog"), async (c) => {
+  const authorized = await authenticateAuthorized(c, "discoverToolCatalog");
+  if ("response" in authorized) return authorized.response;
+  const principal = organizationPrincipal(authorized.auth.principal);
+  if (!principal) return organizationRequired(c);
+
+  try {
+    const definitions = await discoverConnectionCatalog(
+      toolsPrincipal(principal),
+      connectionIdParam(c),
+      c.req.raw.signal
+    );
+    return c.json({ definitions });
+  } catch (error) {
+    return handleToolError(c, error, "Unable to discover tools");
+  }
+});
+
+app.post(routePath("invokeTool"), async (c) => {
+  const authorized = await authenticateAuthorized(c, "invokeTool");
+  if ("response" in authorized) return authorized.response;
+  const principal = organizationPrincipal(authorized.auth.principal);
+  if (!principal) return organizationRequired(c);
+
+  try {
+    const body = (await c.req.json().catch(() => ({}))) as {
+      toolName?: string;
+      input?: unknown;
+      expectedDefinitionDigest?: string;
+      idempotencyKey?: string;
+      runId?: string;
+    };
+    const outcome = await invokeTool(
+      toolsPrincipal(principal),
+      {
+        connectionId: connectionIdParam(c),
+        toolName: body.toolName ?? "",
+        input: body.input,
+        expectedDefinitionDigest: body.expectedDefinitionDigest,
+        idempotencyKey: body.idempotencyKey,
+        runId: body.runId
+      },
+      { signal: c.req.raw.signal }
+    );
+    return c.json(outcome);
+  } catch (error) {
+    return handleToolError(c, error, "Unable to invoke tool");
+  }
+});
+
+app.post(routePath("decideToolApproval"), async (c) => {
+  const authorized = await authenticateAuthorized(c, "decideToolApproval");
+  if ("response" in authorized) return authorized.response;
+  const principal = organizationPrincipal(authorized.auth.principal);
+  if (!principal) return organizationRequired(c);
+
+  try {
+    const body = (await c.req.json().catch(() => ({}))) as { approve?: boolean };
+    return c.json(
+      await decideToolApproval(
+        toolsPrincipal(principal),
+        approvalIdParam(c),
+        body.approve === true
+      )
+    );
+  } catch (error) {
+    return handleToolError(c, error, "Unable to record approval decision");
+  }
+});
+
 app.get(routePath("fetchSessionById"), async (c) => {
   const authorized = await authenticateAuthorized(c, "fetchSessionById");
   if ("response" in authorized) {
@@ -1781,6 +1953,26 @@ function handleSessionStateError(
     { error: "session_state_failed", message: fallbackMessage },
     400
   );
+}
+
+function handleToolError(
+  c: Context,
+  error: unknown,
+  fallbackMessage: string
+) {
+  if (error instanceof ToolError) {
+    if (error.cause) {
+      logger.warn({ err: error.cause, toolError: error.code }, fallbackMessage);
+    }
+    return c.json(
+      { error: error.code, message: error.message },
+      contentfulStatus(error.status)
+    );
+  }
+
+  // Unclassified errors are server faults, not client faults.
+  logger.error({ err: error }, fallbackMessage);
+  return c.json({ error: "tool_gateway_failed", message: fallbackMessage }, 500);
 }
 
 function contentfulStatus(status: number): ContentfulStatusCode {

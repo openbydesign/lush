@@ -9,6 +9,7 @@ import { sessionIpRetention } from "./008_session_ip_retention";
 import { sessionIpColumns } from "./009_session_ip_columns";
 import { organizationInviteTokens } from "./010_organization_invite_tokens";
 import { inferenceModelCapabilities } from "./011_inference_model_capabilities";
+import { toolGateway } from "./012_tool_gateway";
 import type { Migration } from "./types";
 
 export const migrations: Migration[] = [
@@ -22,5 +23,6 @@ export const migrations: Migration[] = [
   sessionIpRetention,
   sessionIpColumns,
   organizationInviteTokens,
-  inferenceModelCapabilities
+  inferenceModelCapabilities,
+  toolGateway
 ];

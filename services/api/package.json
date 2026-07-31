@@ -18,6 +18,7 @@
     "@lush/logging": "workspace:*",
     "@lush/notifications": "workspace:*",
     "@lush/sessions": "workspace:*",
+    "@lush/tools": "workspace:*",
     "hono": "^4.12.27"
   }
 }

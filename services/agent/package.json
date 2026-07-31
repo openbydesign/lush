@@ -14,7 +14,8 @@
     "@lush/config": "workspace:*",
     "@lush/inference": "workspace:*",
     "@lush/logging": "workspace:*",
-    "@lush/sessions": "workspace:*"
+    "@lush/sessions": "workspace:*",
+    "@lush/tools": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^24.0.0"
@@ -22,6 +23,7 @@
   "exports": {
     "./chat-request": "./src/chat-request.ts",
     "./code": "./src/code/index.ts",
+    "./harness": "./src/harness/index.ts",
     "./lush": "./src/agents/lush.ts",
     "./message-merge": "./src/message-merge.ts",
     "./runtime": "./src/runtime.ts",

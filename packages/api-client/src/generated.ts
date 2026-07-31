@@ -473,6 +473,123 @@ export type AgentPromptRequest = {
   messages: AgentChatMessage[];
 };
 
+
+
+export type ToolSource = "mcp" | "openapi" | "native";
+export type ToolConnectionScope = "organization" | "user";
+export type ToolCredentialMode = "none" | "organization" | "user_delegated";
+
+export type ToolConnection = {
+  id: string;
+  organizationId: string;
+  scope: ToolConnectionScope;
+  ownerUserId: string | null;
+  source: ToolSource;
+  label: string;
+  endpoint: string | null;
+  credentialMode: ToolCredentialMode;
+  enabled: boolean;
+  hasCredential: boolean;
+  catalogVersion: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ListToolConnectionsResponse = {
+  connections: ToolConnection[];
+};
+
+export type ToolAnnotations = {
+  readOnly: boolean;
+  destructive: boolean;
+  idempotent: boolean;
+  openWorld: boolean;
+};
+
+export type ToolDefinition = {
+  id: string;
+  connectionId: string;
+  externalName: string;
+  qualifiedName: string;
+  title: string;
+  description: string;
+  inputSchema: unknown;
+  outputSchema: unknown | null;
+  annotations: unknown;
+  definitionDigest: string;
+  enabled: boolean;
+};
+
+export type ListToolDefinitionsResponse = {
+  definitions: ToolDefinition[];
+};
+
+export type CreateToolConnectionRequest = {
+  scope: ToolConnectionScope;
+  source: ToolSource;
+  label: string;
+  endpoint?: { url?: string; headers?: Record<string, string> };
+  credentialMode?: ToolCredentialMode;
+  secret?: string;
+};
+
+export type UpdateToolConnectionRequest = {
+  connectionId: string;
+  label?: string;
+  enabled?: boolean;
+  secret?: string | null;
+};
+
+export type DeleteToolConnectionRequest = {
+  connectionId: string;
+};
+
+export type DeletedToolConnection = {
+  id: string;
+};
+
+export type ToolResultContent =
+  | { type: "text"; text: string }
+  | { type: "json"; data: unknown }
+  | { type: "resource"; uri: string; mimeType?: string; text?: string }
+  | { type: "binary"; mimeType: string; base64: string };
+
+export type ToolResult = {
+  isError: boolean;
+  content: ToolResultContent[];
+  structured?: unknown;
+};
+
+export type ToolApprovalDescriptor = {
+  approvalId: string;
+  scope: string;
+  definitionDigest: string;
+  inputDigest: string;
+  expiresAt: string;
+};
+
+export type InvokeToolRequest = {
+  toolName: string;
+  input?: unknown;
+  expectedDefinitionDigest?: string;
+  idempotencyKey?: string;
+  runId?: string;
+};
+
+export type InvokeToolResponse =
+  | { status: "succeeded" | "failed"; toolCallId: string; result: ToolResult }
+  | { status: "denied"; toolCallId: string | null; reason: string }
+  | { status: "approval_required"; toolCallId: string; approval: ToolApprovalDescriptor };
+
+export type DecideToolApprovalRequest = {
+  approve: boolean;
+};
+
+export type DecideToolApprovalResponse = {
+  approvalId: string;
+  status: "approved" | "denied";
+};
+
 export const apiRoutes = [
   {
     "id": "registerAccount",
@@ -894,6 +1011,75 @@ export const apiRoutes = [
     "responseType": "Response",
     "auth": true,
     "kind": "stream"
+  },
+  {
+    "id": "listToolConnections",
+    "method": "GET",
+    "path": "/v1beta/tools/connections",
+    "responseType": "ListToolConnectionsResponse",
+    "auth": true,
+    "kind": "json"
+  },
+  {
+    "id": "createToolConnection",
+    "method": "POST",
+    "path": "/v1beta/tools/connections",
+    "requestType": "CreateToolConnectionRequest",
+    "responseType": "ToolConnection",
+    "auth": true,
+    "kind": "json"
+  },
+  {
+    "id": "updateToolConnection",
+    "method": "POST",
+    "path": "/v1beta/tools/connections/update",
+    "requestType": "UpdateToolConnectionRequest",
+    "responseType": "ToolConnection",
+    "auth": true,
+    "kind": "json"
+  },
+  {
+    "id": "deleteToolConnection",
+    "method": "POST",
+    "path": "/v1beta/tools/connections/delete",
+    "requestType": "DeleteToolConnectionRequest",
+    "responseType": "DeletedToolConnection",
+    "auth": true,
+    "kind": "json"
+  },
+  {
+    "id": "listToolDefinitions",
+    "method": "GET",
+    "path": "/v1beta/tools/connections/:connectionId/definitions",
+    "responseType": "ListToolDefinitionsResponse",
+    "auth": true,
+    "kind": "json"
+  },
+  {
+    "id": "discoverToolCatalog",
+    "method": "POST",
+    "path": "/v1beta/tools/connections/:connectionId/discover",
+    "responseType": "ListToolDefinitionsResponse",
+    "auth": true,
+    "kind": "json"
+  },
+  {
+    "id": "invokeTool",
+    "method": "POST",
+    "path": "/v1beta/tools/connections/:connectionId/invoke",
+    "requestType": "InvokeToolRequest",
+    "responseType": "InvokeToolResponse",
+    "auth": true,
+    "kind": "json"
+  },
+  {
+    "id": "decideToolApproval",
+    "method": "POST",
+    "path": "/v1beta/tools/approvals/:approvalId",
+    "requestType": "DecideToolApprovalRequest",
+    "responseType": "DecideToolApprovalResponse",
+    "auth": true,
+    "kind": "json"
   }
 ] as const;
 
@@ -945,6 +1131,14 @@ const FETCH_SESSION_SETTINGS_ROUTE = apiRoutes.find((route) => route.id === "fet
 const UPDATE_SESSION_SETTINGS_ROUTE = apiRoutes.find((route) => route.id === "updateSessionSettings")!;
 const STREAM_AGENT_CHAT_ROUTE = apiRoutes.find((route) => route.id === "streamAgentChat")!;
 const STREAM_AGENT_PROMPT_ROUTE = apiRoutes.find((route) => route.id === "streamAgentPrompt")!;
+const LIST_TOOL_CONNECTIONS_ROUTE = apiRoutes.find((route) => route.id === "listToolConnections")!;
+const CREATE_TOOL_CONNECTION_ROUTE = apiRoutes.find((route) => route.id === "createToolConnection")!;
+const UPDATE_TOOL_CONNECTION_ROUTE = apiRoutes.find((route) => route.id === "updateToolConnection")!;
+const DELETE_TOOL_CONNECTION_ROUTE = apiRoutes.find((route) => route.id === "deleteToolConnection")!;
+const LIST_TOOL_DEFINITIONS_ROUTE = apiRoutes.find((route) => route.id === "listToolDefinitions")!;
+const DISCOVER_TOOL_CATALOG_ROUTE = apiRoutes.find((route) => route.id === "discoverToolCatalog")!;
+const INVOKE_TOOL_ROUTE = apiRoutes.find((route) => route.id === "invokeTool")!;
+const DECIDE_TOOL_APPROVAL_ROUTE = apiRoutes.find((route) => route.id === "decideToolApproval")!;
 
 export function resolveApiBaseUrl(apiBaseUrl: string) {
   return apiBaseUrl.trim().replace(/\/+$/, "");
@@ -1990,5 +2184,173 @@ export function streamAgentPrompt(
     body: JSON.stringify(body),
     signal
   });
+}
+
+export async function listToolConnections(
+  apiBaseUrl: string,
+  sessionToken: string | undefined,
+) {
+  const response = await fetch(apiUrl(apiBaseUrl, LIST_TOOL_CONNECTIONS_ROUTE.path), {
+    credentials: "include",
+    headers: {
+      ...authorizationHeaders(sessionToken),
+
+    }
+  });
+
+  if (!response.ok) {
+    throw await apiError("listToolConnections", response);
+  }
+
+  return response.json() as Promise<ListToolConnectionsResponse>;
+}
+
+export async function createToolConnection(
+  apiBaseUrl: string,
+  sessionToken: string | undefined, body: CreateToolConnectionRequest
+) {
+  const response = await fetch(apiUrl(apiBaseUrl, CREATE_TOOL_CONNECTION_ROUTE.path), {
+    method: "POST",
+    credentials: "include",
+    headers: {
+      ...authorizationHeaders(sessionToken),
+      "content-type": "application/json"
+    },
+    body: JSON.stringify(body)
+  });
+
+  if (!response.ok) {
+    throw await apiError("createToolConnection", response);
+  }
+
+  return response.json() as Promise<ToolConnection>;
+}
+
+export async function updateToolConnection(
+  apiBaseUrl: string,
+  sessionToken: string | undefined, body: UpdateToolConnectionRequest
+) {
+  const response = await fetch(apiUrl(apiBaseUrl, UPDATE_TOOL_CONNECTION_ROUTE.path), {
+    method: "POST",
+    credentials: "include",
+    headers: {
+      ...authorizationHeaders(sessionToken),
+      "content-type": "application/json"
+    },
+    body: JSON.stringify(body)
+  });
+
+  if (!response.ok) {
+    throw await apiError("updateToolConnection", response);
+  }
+
+  return response.json() as Promise<ToolConnection>;
+}
+
+export async function deleteToolConnection(
+  apiBaseUrl: string,
+  sessionToken: string | undefined, body: DeleteToolConnectionRequest
+) {
+  const response = await fetch(apiUrl(apiBaseUrl, DELETE_TOOL_CONNECTION_ROUTE.path), {
+    method: "POST",
+    credentials: "include",
+    headers: {
+      ...authorizationHeaders(sessionToken),
+      "content-type": "application/json"
+    },
+    body: JSON.stringify(body)
+  });
+
+  if (!response.ok) {
+    throw await apiError("deleteToolConnection", response);
+  }
+
+  return response.json() as Promise<DeletedToolConnection>;
+}
+
+export async function listToolDefinitions(
+  apiBaseUrl: string,
+  connectionId: string,
+  sessionToken: string | undefined,
+) {
+  const response = await fetch(apiUrl(apiBaseUrl, routePath(LIST_TOOL_DEFINITIONS_ROUTE.path, { connectionId })), {
+    credentials: "include",
+    headers: {
+      ...authorizationHeaders(sessionToken),
+
+    }
+  });
+
+  if (!response.ok) {
+    throw await apiError("listToolDefinitions", response);
+  }
+
+  return response.json() as Promise<ListToolDefinitionsResponse>;
+}
+
+export async function discoverToolCatalog(
+  apiBaseUrl: string,
+  connectionId: string,
+  sessionToken: string | undefined, body: undefined
+) {
+  const response = await fetch(apiUrl(apiBaseUrl, routePath(DISCOVER_TOOL_CATALOG_ROUTE.path, { connectionId })), {
+    method: "POST",
+    credentials: "include",
+    headers: {
+      ...authorizationHeaders(sessionToken),
+      "content-type": "application/json"
+    },
+    body: JSON.stringify(body)
+  });
+
+  if (!response.ok) {
+    throw await apiError("discoverToolCatalog", response);
+  }
+
+  return response.json() as Promise<ListToolDefinitionsResponse>;
+}
+
+export async function invokeTool(
+  apiBaseUrl: string,
+  connectionId: string,
+  sessionToken: string | undefined, body: InvokeToolRequest
+) {
+  const response = await fetch(apiUrl(apiBaseUrl, routePath(INVOKE_TOOL_ROUTE.path, { connectionId })), {
+    method: "POST",
+    credentials: "include",
+    headers: {
+      ...authorizationHeaders(sessionToken),
+      "content-type": "application/json"
+    },
+    body: JSON.stringify(body)
+  });
+
+  if (!response.ok) {
+    throw await apiError("invokeTool", response);
+  }
+
+  return response.json() as Promise<InvokeToolResponse>;
+}
+
+export async function decideToolApproval(
+  apiBaseUrl: string,
+  approvalId: string,
+  sessionToken: string | undefined, body: DecideToolApprovalRequest
+) {
+  const response = await fetch(apiUrl(apiBaseUrl, routePath(DECIDE_TOOL_APPROVAL_ROUTE.path, { approvalId })), {
+    method: "POST",
+    credentials: "include",
+    headers: {
+      ...authorizationHeaders(sessionToken),
+      "content-type": "application/json"
+    },
+    body: JSON.stringify(body)
+  });
+
+  if (!response.ok) {
+    throw await apiError("decideToolApproval", response);
+  }
+
+  return response.json() as Promise<DecideToolApprovalResponse>;
 }
 

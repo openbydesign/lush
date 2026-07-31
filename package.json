@@ -21,7 +21,7 @@
     "auth:verify-email": "bun run --cwd services/authz verify-email",
     "api:codegen": "bun run --cwd services/api codegen",
     "api:openapi": "bun run --cwd services/api openapi:codegen",
-    "typecheck": "bun run api:codegen && bun run api:openapi && bun run --cwd packages/config typecheck && bun run --cwd packages/code typecheck && bun run --cwd packages/logging typecheck && bun run --cwd packages/db typecheck && bun run --cwd services/notifications typecheck && bun run --cwd services/authz typecheck && bun run --cwd services/inference typecheck && bun run --cwd services/sessions typecheck && bun run --cwd services/agent typecheck && bun run --cwd services/api typecheck && bun run --cwd packages/api-client typecheck && bun run --cwd apps/lush typecheck && bun run --cwd services/docs typecheck",
+    "typecheck": "bun run api:codegen && bun run api:openapi && bun run --cwd packages/config typecheck && bun run --cwd packages/code typecheck && bun run --cwd packages/logging typecheck && bun run --cwd packages/db typecheck && bun run --cwd services/notifications typecheck && bun run --cwd services/authz typecheck && bun run --cwd services/inference typecheck && bun run --cwd services/sessions typecheck && bun run --cwd services/tools typecheck && bun run --cwd services/agent typecheck && bun run --cwd services/api typecheck && bun run --cwd packages/api-client typecheck && bun run --cwd apps/lush typecheck && bun run --cwd services/docs typecheck",
     "test:repo": "bun run typecheck && bun build services/api/src/server.ts --target bun --outdir /tmp/lush-api-check && bun build services/agent/src/server.ts --target bun --outdir /tmp/lush-agent-check",
     "test": "bun test",
     "build": "bun run typecheck && bun run --cwd apps/lush bundle",
@@ -38,6 +38,7 @@
   },
   "devDependencies": {
     "@typescript/native-preview": "^7.0.0-dev.20260626.1",
-    "dotenv": "^17.4.2"
+    "dotenv": "^17.4.2",
+    "kysely": "^0.28.7"
   }
 }
