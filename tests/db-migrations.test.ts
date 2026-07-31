@@ -59,6 +59,15 @@ test("the built-in Lush revision digest matches its immutable instructions", () 
     .toBe(builtinLushRevisionDigest);
 });
 
+test("tool health constraint repair is scoped to the active schema", async () => {
+  const migration = await Bun.file(
+    "packages/db/src/migrations/015_tool_catalog_acknowledgment.ts"
+  ).text();
+
+  expect(migration).toContain("namespace.nspname = current_schema()");
+  expect(migration).toContain("tool_connections_health_status_check");
+});
+
 test("model capabilities are added append-only as structured JSON", async () => {
   const migration = await Bun.file(
     "packages/db/src/migrations/011_inference_model_capabilities.ts"

@@ -16,6 +16,22 @@ import { McpConnector } from "./connectors/mcp/client";
 import { OpenApiConnector, type OpenApiConfig } from "./connectors/openapi";
 import { defaultEgressPolicy, type EgressPolicy } from "./net/egress";
 
+const RESERVED_CREDENTIAL_HEADERS = new Set([
+  "connection",
+  "content-length",
+  "cookie",
+  "host",
+  "keep-alive",
+  "proxy-authenticate",
+  "proxy-authorization",
+  "set-cookie",
+  "te",
+  "trailer",
+  "transfer-encoding",
+  "upgrade"
+]);
+const HEADER_NAME_PATTERN = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
+
 export type McpEndpointConfig = {
   url: string;
   /** Optional static headers configured on the connection (never secrets). */
@@ -106,7 +122,7 @@ export function parseMcpConfig(raw: unknown): McpEndpointConfig {
   return {
     url: url.trim(),
     headers: sanitizeHeaders(config.headers),
-    authHeader: typeof config.authHeader === "string" ? config.authHeader : undefined,
+    authHeader: credentialHeaderName(config.authHeader),
     authScheme: typeof config.authScheme === "string" ? config.authScheme : undefined
   };
 }
@@ -131,9 +147,29 @@ export function parseOpenApiConfig(raw: unknown): OpenApiConfig {
   return {
     url: url.trim(),
     headers: sanitizeHeaders(config.headers),
-    authHeader: typeof config.authHeader === "string" ? config.authHeader : undefined,
+    authHeader: credentialHeaderName(config.authHeader),
     authScheme: typeof config.authScheme === "string" ? config.authScheme : undefined
   };
+}
+
+function credentialHeaderName(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string" || !HEADER_NAME_PATTERN.test(value)) {
+    throw new ConnectorError(
+      "invalid_endpoint",
+      "Credential header name is invalid",
+      400
+    );
+  }
+  const normalized = value.toLowerCase();
+  if (RESERVED_CREDENTIAL_HEADERS.has(normalized)) {
+    throw new ConnectorError(
+      "invalid_endpoint",
+      `Credential header is reserved and cannot be configured: ${value}`,
+      400
+    );
+  }
+  return normalized;
 }
 
 function sanitizeHeaders(

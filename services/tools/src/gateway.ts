@@ -120,7 +120,7 @@ export async function invokeTool(
 
   const inputDigest = await sha256Hex(canonicalInput);
   const annotations = normalizeAnnotations(definition.annotations);
-    const decision = decideApproval(annotations, connection.policy);
+  const decision = decideApproval(annotations, connection.policy);
 
   if (decision === "deny") {
     // Do not consume the idempotency key on a policy denial: a later policy

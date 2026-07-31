@@ -2,8 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import {
   encryptSecret,
   decryptSecret,
-  secretEnvelopeNeedsRotation,
-  SecretError
+  secretEnvelopeNeedsRotation
 } from "../services/tools/src/secrets";
 
 describe("tool credential envelope encryption", () => {

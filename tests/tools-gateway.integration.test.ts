@@ -26,6 +26,10 @@ import { canonicalJson, sha256Hex } from "../services/tools/src/digest";
 import { validateInput } from "../services/tools/src/validate";
 import { createAgentRun } from "../services/agent/src/runs";
 import { createSession } from "../services/sessions/src/runtime";
+import {
+  parseMcpConfig,
+  parseOpenApiConfig
+} from "../services/tools/src/connector-factory";
 
 async function invokeTool(
   principal: ToolsPrincipal,
@@ -88,6 +92,17 @@ test("object enum validation is independent of key insertion order", () => {
   expect(
     validateInput({ enum: [{ a: 1, b: 2 }] }, { b: 2, a: 1 })
   ).toEqual({ ok: true });
+});
+
+test("remote connector credential headers reject reserved and invalid names", () => {
+  for (const parse of [parseMcpConfig, parseOpenApiConfig]) {
+    expect(() => parse({ url: "https://tools.example", authHeader: "Host" }))
+      .toThrow("reserved");
+    expect(() => parse({ url: "https://tools.example", authHeader: "x-api-key\r\nx" }))
+      .toThrow("invalid");
+    expect(parse({ url: "https://tools.example", authHeader: "X-API-Key" }))
+      .toMatchObject({ authHeader: "x-api-key" });
+  }
 });
 
 if (!databaseUrl) {
