@@ -16,5 +16,6 @@ declare const Bun: {
   }): {
     hostname: string;
     port: number;
+    stop(closeActiveConnections?: boolean): Promise<void>;
   };
 };

@@ -161,6 +161,7 @@ import {
   sessionCookieName,
   strictTransportSecurity
 } from "./transport-security";
+import { registerGracefulShutdown } from "./graceful-shutdown";
 
 const apiConfig = readApiRuntimeConfig();
 await initializeJwtKeyStore();
@@ -1657,6 +1658,8 @@ const server = Bun.serve({
     return app.fetch(request);
   }
 });
+
+registerGracefulShutdown(server, logger);
 
 logger.info(
   {
