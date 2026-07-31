@@ -67,6 +67,14 @@ export function registerGracefulShutdown(
     );
   };
 
-  process.once("SIGTERM", shutdown);
-  process.once("SIGINT", shutdown);
+  const onSigterm = () => shutdown("SIGTERM");
+  const onSigint = () => shutdown("SIGINT");
+
+  process.on("SIGTERM", onSigterm);
+  process.on("SIGINT", onSigint);
+
+  return () => {
+    process.off("SIGTERM", onSigterm);
+    process.off("SIGINT", onSigint);
+  };
 }
