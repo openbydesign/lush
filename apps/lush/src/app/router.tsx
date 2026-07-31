@@ -43,6 +43,11 @@ const OrganizationSettingsPage = lazy(() =>
     default: module.OrganizationSettingsPage
   }))
 );
+const ToolsSettingsPage = lazy(() =>
+  import("../routes/settings/ToolsSettingsPage").then((module) => ({
+    default: module.ToolsSettingsPage
+  }))
+);
 
 const router = createBrowserRouter([
   {
@@ -96,6 +101,7 @@ const router = createBrowserRouter([
                   { path: "settings/appearance", element: <PersonalSettingsRoute pane="appearance" /> },
                   { path: "settings/organization", element: <OrganizationSettingsRoute /> },
                   { path: "settings/inference", element: <InferenceSettingsRoute /> },
+                  { path: "settings/tools", element: <ToolsSettingsRoute /> },
                   ...routes.flatMap((route) => {
                     const element = route.href === "/chat"
                       ? <ChatRoute />
@@ -260,6 +266,17 @@ function InferenceSettingsRoute() {
       onProviderDelete={app.removeInferenceProvider}
       onModelEnabledChange={app.setInferenceModelEnabled}
       onModelDefaultChange={app.setModelDefault}
+    />
+  );
+}
+
+function ToolsSettingsRoute() {
+  const app = useApp();
+  return (
+    <ToolsSettingsPage
+      apiBaseUrl={app.apiBaseUrl}
+      currentRole={app.membershipRole}
+      runApiRequest={app.runApiRequest}
     />
   );
 }

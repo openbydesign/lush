@@ -484,6 +484,8 @@ export type ToolAnnotations = {
   openWorld: boolean;
 };
 
+export type ToolConnectionHealth = "unknown" | "healthy" | "unhealthy";
+
 export type ToolConnectionsTable = {
   id: Generated<string>;
   organizationId: string;
@@ -495,6 +497,10 @@ export type ToolConnectionsTable = {
   enabled: boolean;
   policy: unknown;
   catalogVersion: string | null;
+  catalogChanged: boolean;
+  healthStatus: ToolConnectionHealth;
+  healthCheckedAt: Timestamp | null;
+  healthErrorCode: string | null;
   createdAt: Timestamp;
   updatedAt: Timestamp;
 };
@@ -518,6 +524,8 @@ export type ToolDefinitionsTable = {
   inputSchema: unknown;
   outputSchema: unknown | null;
   annotations: ToolAnnotations;
+  /** Connector-owned invocation metadata. Never exposed as policy. */
+  sourceMetadata: unknown;
   definitionDigest: string;
   enabled: boolean;
   createdAt: Timestamp;

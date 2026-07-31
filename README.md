@@ -25,7 +25,8 @@ bun install
 
 Local development defaults live in `.env.template`. The root dev target creates
 `.env.development` from that template the first time it runs, generating a
-local-only JWT keypair and `LUSH_SECRET_KEY` on the fly. `.env.development` is
+local-only JWT keypair, `LUSH_SECRET_KEY`, and independent
+`LUSH_TOOL_CREDENTIAL_KEY` on the fly. `.env.development` is
 ignored by git.
 
 ## Quickstart

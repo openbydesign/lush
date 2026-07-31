@@ -537,6 +537,10 @@ function useAppController() {
     return runWithTokenRefresh(currentAccessSession(), operation);
   };
 
+  const runApiRequest = async <T,>(
+    operation: (sessionToken: string) => Promise<T>
+  ) => runAuthenticated((session) => operation(session.accessToken));
+
   useEffect(() => {
     if (restoreStartedRef.current) return;
     restoreStartedRef.current = true;
@@ -1277,6 +1281,7 @@ function useAppController() {
     inferenceProviderError,
     isAddingInferenceProvider,
     refreshingInferenceProviderId,
+    runApiRequest,
     authenticate,
     signOut,
     ensureSession,

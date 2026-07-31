@@ -13,6 +13,7 @@ const keyIdPlaceholder = "__GENERATED_LUSH_AUTH_JWT_KEY_ID__";
 const privateKeyPlaceholder = "__GENERATED_LUSH_AUTH_JWT_PRIVATE_KEY__";
 const publicKeysPlaceholder = "__GENERATED_LUSH_AUTH_JWT_PUBLIC_KEYS__";
 const secretKeyPlaceholder = "__GENERATED_LUSH_SECRET_KEY__";
+const toolCredentialKeyPlaceholder = "__GENERATED_LUSH_TOOL_CREDENTIAL_KEY__";
 const devEmailDefaults = {
   LUSH_EMAIL_DELIVERY: "log",
   LUSH_PUBLIC_APP_URL: "http://localhost:5874"
@@ -23,6 +24,7 @@ export type DevEnvSecrets = {
   privateKeyPem: string;
   publicKeyPem: string;
   secretKey: string;
+  toolCredentialKey: string;
 };
 
 export async function ensureDevEnvFile(options: {
@@ -34,7 +36,7 @@ export async function ensureDevEnvFile(options: {
 
   if (await fileExists(envPath)) {
     const contents = await Bun.file(envPath).text();
-    const updatedContents = withDevEmailDefaults(contents);
+    const updatedContents = withDevDefaults(contents);
     if (updatedContents !== contents) {
       await Bun.write(envPath, updatedContents);
     }
@@ -46,7 +48,7 @@ export async function ensureDevEnvFile(options: {
   }
 
   const template = await Bun.file(templatePath).text();
-  const contents = withDevEmailDefaults(
+  const contents = withDevDefaults(
     fillDevEnvTemplate(template, await generateDevEnvSecrets())
   );
   await Bun.write(envPath, contents);
@@ -58,8 +60,12 @@ export async function ensureDevEnvFile(options: {
   };
 }
 
-function withDevEmailDefaults(contents: string) {
-  const additions = Object.entries(devEmailDefaults)
+function withDevDefaults(contents: string) {
+  const defaults = {
+    ...devEmailDefaults,
+    LUSH_TOOL_CREDENTIAL_KEY: randomHex(32)
+  };
+  const additions = Object.entries(defaults)
     .filter(([name]) => !new RegExp(`^${name}=`, "m").test(contents))
     .map(([name, value]) => `${name}=${value}`);
   return additions.length > 0
@@ -72,7 +78,8 @@ export function fillDevEnvTemplate(template: string, secrets: DevEnvSecrets) {
     keyIdPlaceholder,
     privateKeyPlaceholder,
     publicKeysPlaceholder,
-    secretKeyPlaceholder
+    secretKeyPlaceholder,
+    toolCredentialKeyPlaceholder
   ].filter((placeholder) => !template.includes(placeholder));
 
   if (missingPlaceholders.length > 0) {
@@ -90,7 +97,11 @@ export function fillDevEnvTemplate(template: string, secrets: DevEnvSecrets) {
         JSON.stringify({ [secrets.keyId]: secrets.publicKeyPem })
       )
     )
-    .replace(secretKeyPlaceholder, quoteEnvValue(secrets.secretKey));
+    .replace(secretKeyPlaceholder, quoteEnvValue(secrets.secretKey))
+    .replace(
+      toolCredentialKeyPlaceholder,
+      quoteEnvValue(secrets.toolCredentialKey)
+    );
 }
 
 export async function generateDevEnvSecrets(): Promise<DevEnvSecrets> {
@@ -98,7 +109,8 @@ export async function generateDevEnvSecrets(): Promise<DevEnvSecrets> {
 
   return {
     ...keyPair,
-    secretKey: randomHex(32)
+    secretKey: randomHex(32),
+    toolCredentialKey: randomHex(32)
   };
 }
 

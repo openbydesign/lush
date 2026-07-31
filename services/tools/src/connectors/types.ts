@@ -42,6 +42,8 @@ export type NormalizedToolDefinition = {
   inputSchema: JsonSchema;
   outputSchema?: JsonSchema;
   annotations: ToolAnnotations;
+  /** Source-specific invocation data persisted with the normalized definition. */
+  sourceMetadata?: Record<string, unknown>;
 };
 
 /**
@@ -68,6 +70,7 @@ export type ToolResult = {
 export type ConnectorInvocation = {
   externalName: string;
   input: unknown;
+  sourceMetadata?: unknown;
   /**
    * Bounds enforced by the connector transport in addition to the gateway's own
    * checks. Defense in depth: a connector must not exceed these even if the

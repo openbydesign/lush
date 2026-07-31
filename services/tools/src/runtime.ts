@@ -11,6 +11,7 @@
 import { getDb } from "@lush/db/client";
 import type {
   ToolConnectionRow,
+  ToolConnectionHealth,
   ToolCredentialMode,
   ToolDefinitionRow,
   ToolSource,
@@ -18,14 +19,27 @@ import type {
 } from "@lush/db/schema";
 import type { Transaction } from "kysely";
 import type { Database } from "@lush/db/schema";
-import { buildConnector, parseMcpConfig } from "./connector-factory";
+import {
+  buildConnector,
+  parseMcpConfig,
+  parseOpenApiConfig
+} from "./connector-factory";
 import {
   ConnectorError,
   restrictiveAnnotations,
   type NormalizedToolDefinition
 } from "./connectors/types";
 import { digestValue } from "./digest";
-import { decryptSecret, encryptSecret } from "./secrets";
+import {
+  decryptSecret,
+  encryptSecret,
+  secretEnvelopeNeedsRotation
+} from "./secrets";
+import {
+  explainToolPolicy,
+  normalizeConnectionPolicy,
+  type ToolPolicyExplanation
+} from "./policy";
 
 export class ToolError extends Error {
   constructor(
@@ -60,6 +74,12 @@ export type ToolConnectionSummary = {
   enabled: boolean;
   hasCredential: boolean;
   catalogVersion: string | null;
+  catalogChanged: boolean;
+  health: {
+    status: ToolConnectionHealth;
+    checkedAt: string | null;
+    errorCode: string | null;
+  };
   createdAt: string;
   updatedAt: string;
 };
@@ -77,6 +97,7 @@ export type ToolDefinitionSummary = {
   /** Stable digest a caller can pin and pass back as expectedDefinitionDigest. */
   definitionDigest: string;
   enabled: boolean;
+  policy: ToolPolicyExplanation;
 };
 
 export type CreateToolConnectionRequest = {
@@ -94,6 +115,15 @@ export type UpdateToolConnectionRequest = {
   label?: string;
   enabled?: boolean;
   secret?: string | null;
+  policy?: {
+    deny?: boolean;
+    approval?: "default" | "never" | "every_call";
+  };
+};
+
+export type ToolGatewaySettings = {
+  enabled: boolean;
+  canManageOrganization: boolean;
 };
 
 /** Phase-2 rollout gate. Absence/default false keeps every HTTP route dark. */
@@ -104,6 +134,37 @@ export async function isToolGatewayEnabled(organizationId: string): Promise<bool
     .where("id", "=", organizationId)
     .executeTakeFirst();
   return organization?.toolGatewayEnabled === true;
+}
+
+export async function getToolGatewaySettings(
+  principal: ToolsPrincipal
+): Promise<ToolGatewaySettings> {
+  return {
+    enabled: await isToolGatewayEnabled(principal.organizationId),
+    canManageOrganization: principal.role === "admin"
+  };
+}
+
+export async function updateToolGatewaySettings(
+  principal: ToolsPrincipal,
+  enabled: unknown
+): Promise<ToolGatewaySettings> {
+  if (principal.role !== "admin") {
+    throw new ToolError(
+      "forbidden",
+      "Only organization administrators can change tool gateway settings",
+      403
+    );
+  }
+  if (typeof enabled !== "boolean") {
+    throw new ToolError("invalid_settings", "Tool gateway enabled must be a boolean");
+  }
+  await getDb()
+    .updateTable("organizations")
+    .set({ toolGatewayEnabled: enabled, updatedAt: new Date() })
+    .where("id", "=", principal.organizationId)
+    .execute();
+  return { enabled, canManageOrganization: true };
 }
 
 export async function listToolConnections(
@@ -193,6 +254,10 @@ export async function createToolConnection(
         enabled: true,
         policy: {},
         catalogVersion: null,
+        catalogChanged: false,
+        healthStatus: "unknown",
+        healthCheckedAt: null,
+        healthErrorCode: null,
         createdAt: now,
         updatedAt: now
       })
@@ -239,6 +304,23 @@ export async function updateToolConnection(
     }
     if (typeof request.enabled === "boolean") {
       changes.enabled = request.enabled;
+    }
+    if (request.policy !== undefined) {
+      if (!request.policy || typeof request.policy !== "object") {
+        throw new ToolError("invalid_policy", "Connection policy must be an object");
+      }
+      const rawPolicy = request.policy as Record<string, unknown>;
+      if (
+        Object.keys(rawPolicy).some((key) => key !== "deny" && key !== "approval") ||
+        (rawPolicy.deny !== undefined && typeof rawPolicy.deny !== "boolean") ||
+        (rawPolicy.approval !== undefined &&
+          rawPolicy.approval !== "default" &&
+          rawPolicy.approval !== "never" &&
+          rawPolicy.approval !== "every_call")
+      ) {
+        throw new ToolError("invalid_policy", "Connection policy is invalid");
+      }
+      changes.policy = normalizeConnectionPolicy(request.policy);
     }
     await trx
       .updateTable("toolConnections")
@@ -289,14 +371,14 @@ export async function listToolDefinitions(
   principal: ToolsPrincipal,
   connectionId: string
 ): Promise<ToolDefinitionSummary[]> {
-  await requireVisibleConnection(principal, connectionId);
+  const connection = await requireVisibleConnection(principal, connectionId);
   const rows = await getDb()
     .selectFrom("toolDefinitions")
     .selectAll()
     .where("connectionId", "=", connectionId)
     .orderBy("externalName", "asc")
     .execute();
-  return rows.map(summarizeDefinition);
+  return rows.map((row) => summarizeDefinition(row, connection.policy));
 }
 
 /**
@@ -317,6 +399,11 @@ export async function discoverConnectionCatalog(
   try {
     discovered = await connector.discover(signal);
   } catch (error) {
+    const failure =
+      error instanceof ConnectorError
+        ? error
+        : new ConnectorError("discovery_failed", "Tool discovery failed", 502, error);
+    await updateConnectionHealth(connection.id, "unhealthy", failure.code);
     if (error instanceof ConnectorError) {
       throw new ToolError(error.code, error.message, error.status, error);
     }
@@ -361,6 +448,7 @@ export async function discoverConnectionCatalog(
           inputSchema: tool.inputSchema,
           outputSchema: tool.outputSchema ?? null,
           annotations,
+          sourceMetadata: tool.sourceMetadata ?? {},
           definitionDigest,
           enabled: true,
           createdAt: now,
@@ -374,6 +462,7 @@ export async function discoverConnectionCatalog(
             inputSchema: eb.ref("excluded.inputSchema"),
             outputSchema: eb.ref("excluded.outputSchema"),
             annotations: eb.ref("excluded.annotations"),
+            sourceMetadata: eb.ref("excluded.sourceMetadata"),
             definitionDigest: eb.ref("excluded.definitionDigest"),
             updatedAt: now
           }))
@@ -383,7 +472,15 @@ export async function discoverConnectionCatalog(
 
     await trx
       .updateTable("toolConnections")
-      .set({ catalogVersion, updatedAt: now })
+      .set({
+        catalogVersion,
+        catalogChanged:
+          connection.catalogVersion !== null && connection.catalogVersion !== catalogVersion,
+        healthStatus: "healthy",
+        healthCheckedAt: now,
+        healthErrorCode: null,
+        updatedAt: now
+      })
       .where("id", "=", connection.id)
       .execute();
   });
@@ -479,10 +576,22 @@ export async function resolveCredential(
     );
   }
 
-  return decryptSecret(binding.encryptedSecret, {
+  const context = {
     connectionId: connection.id,
     subjectUserId: binding.subjectUserId ?? "organization"
-  });
+  };
+  const plaintext = await decryptSecret(binding.encryptedSecret, context);
+  if (await secretEnvelopeNeedsRotation(binding.encryptedSecret)) {
+    await getDb()
+      .updateTable("toolCredentialBindings")
+      .set({
+        encryptedSecret: await encryptSecret(plaintext, context),
+        updatedAt: new Date()
+      })
+      .where("id", "=", binding.id)
+      .execute();
+  }
+  return plaintext;
 }
 
 async function storeCredential(
@@ -566,7 +675,20 @@ function normalizeEndpoint(
     }
   }
   if (source === "openapi") {
-    throw new ToolError("unsupported_source", "OpenAPI connections are not yet supported", 501);
+    if (endpoint?.headers && Object.keys(endpoint.headers).length > 0) {
+      throw new ToolError(
+        "invalid_endpoint",
+        "Static endpoint headers are not supported; use an encrypted credential binding"
+      );
+    }
+    try {
+      return parseOpenApiConfig({ url: endpoint?.url });
+    } catch (error) {
+      if (error instanceof ConnectorError) {
+        throw new ToolError(error.code, error.message, error.status, error);
+      }
+      throw error;
+    }
   }
   return {};
 }
@@ -584,7 +706,8 @@ function summarizeConnection(
   credentialFlags: Set<string>
 ): ToolConnectionSummary {
   const endpoint =
-    row.source === "mcp" && row.endpointConfig && typeof row.endpointConfig === "object"
+    (row.source === "mcp" || row.source === "openapi") &&
+    row.endpointConfig && typeof row.endpointConfig === "object"
       ? ((row.endpointConfig as { url?: string }).url ?? null)
       : null;
   return {
@@ -599,12 +722,21 @@ function summarizeConnection(
     enabled: row.enabled,
     hasCredential: credentialFlags.has(row.id),
     catalogVersion: row.catalogVersion,
+    catalogChanged: row.catalogChanged,
+    health: {
+      status: row.healthStatus,
+      checkedAt: row.healthCheckedAt ? toIso(row.healthCheckedAt) : null,
+      errorCode: row.healthErrorCode
+    },
     createdAt: toIso(row.createdAt),
     updatedAt: toIso(row.updatedAt)
   };
 }
 
-function summarizeDefinition(row: ToolDefinitionRow): ToolDefinitionSummary {
+function summarizeDefinition(
+  row: ToolDefinitionRow,
+  connectionPolicy: unknown
+): ToolDefinitionSummary {
   return {
     id: row.id,
     connectionId: row.connectionId,
@@ -616,8 +748,26 @@ function summarizeDefinition(row: ToolDefinitionRow): ToolDefinitionSummary {
     outputSchema: row.outputSchema,
     annotations: row.annotations,
     definitionDigest: row.definitionDigest,
-    enabled: row.enabled
+    enabled: row.enabled,
+    policy: explainToolPolicy(row.annotations, connectionPolicy)
   };
+}
+
+async function updateConnectionHealth(
+  connectionId: string,
+  status: ToolConnectionHealth,
+  errorCode: string | null
+): Promise<void> {
+  await getDb()
+    .updateTable("toolConnections")
+    .set({
+      healthStatus: status,
+      healthCheckedAt: new Date(),
+      healthErrorCode: errorCode,
+      updatedAt: new Date()
+    })
+    .where("id", "=", connectionId)
+    .execute();
 }
 
 function toIso(value: unknown): string {

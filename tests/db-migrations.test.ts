@@ -28,7 +28,8 @@ test("database migration ids match their ordinal prefix", () => {
     "010_organization_invite_tokens",
     "011_inference_model_capabilities",
     "012_tool_gateway",
-    "013_agent_runs"
+    "013_agent_runs",
+    "014_tool_control_plane"
   ]);
 });
 

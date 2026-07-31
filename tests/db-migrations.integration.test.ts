@@ -59,6 +59,7 @@ if (!databaseUrl) {
         select conname
         from pg_constraint
         where conname in ('tool_calls_run_id_fkey', 'tool_approvals_run_id_fkey')
+          and connamespace = current_schema()::regnamespace
         order by conname
       `.execute(harness.db);
       expect(constraints.rows.map((row) => row.conname)).toEqual([

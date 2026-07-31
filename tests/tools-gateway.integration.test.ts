@@ -7,9 +7,11 @@ import {
   createToolConnection,
   deleteToolConnection,
   discoverConnectionCatalog,
+  getToolGatewaySettings,
   isToolGatewayEnabled,
   listToolConnections,
   updateToolConnection,
+  updateToolGatewaySettings,
   requireVisibleConnection,
   type ToolsPrincipal
 } from "../services/tools/src/runtime";
@@ -95,13 +97,16 @@ if (!databaseUrl) {
     let adminDb: ReturnType<typeof createDb>;
     let previousDatabaseUrl: string | undefined;
     let previousSecret: string | undefined;
+    let previousToolKey: string | undefined;
     let previousEgress: string | undefined;
 
     beforeAll(async () => {
       previousDatabaseUrl = process.env.DATABASE_URL;
       previousSecret = process.env.LUSH_SECRET_KEY;
+      previousToolKey = process.env.LUSH_TOOL_CREDENTIAL_KEY;
       previousEgress = process.env.LUSH_TOOLS_ALLOW_PRIVATE_EGRESS;
       process.env.LUSH_SECRET_KEY = "test-secret-key";
+      process.env.LUSH_TOOL_CREDENTIAL_KEY = "test-tool-credential-key";
       process.env.LUSH_TOOLS_ALLOW_PRIVATE_EGRESS = "true";
 
       schemaName = `test_${crypto.randomUUID().replace(/-/g, "")}`;
@@ -123,6 +128,7 @@ if (!databaseUrl) {
       await adminDb.destroy();
       restoreEnv("DATABASE_URL", previousDatabaseUrl);
       restoreEnv("LUSH_SECRET_KEY", previousSecret);
+      restoreEnv("LUSH_TOOL_CREDENTIAL_KEY", previousToolKey);
       restoreEnv("LUSH_TOOLS_ALLOW_PRIVATE_EGRESS", previousEgress);
     });
 
@@ -134,6 +140,7 @@ if (!databaseUrl) {
       await db.deleteFrom("toolDefinitions").execute();
       await db.deleteFrom("toolCredentialBindings").execute();
       await db.deleteFrom("toolConnections").execute();
+      openApiVersion = 1;
     });
 
     // ---- MCP mock server ---------------------------------------------------
@@ -250,6 +257,22 @@ if (!databaseUrl) {
         .where("id", "=", principal.organizationId)
         .execute();
       expect(await isToolGatewayEnabled(principal.organizationId)).toBe(true);
+    });
+
+    test("tool gateway settings are readable by members and writable only by admins", async () => {
+      const admin = await seedPrincipal("admin");
+      const member = await seedMember(admin.organizationId, "user");
+      expect(await getToolGatewaySettings(member)).toEqual({
+        enabled: false,
+        canManageOrganization: false
+      });
+      await expect(updateToolGatewaySettings(member, true)).rejects.toMatchObject({
+        code: "forbidden"
+      });
+      expect(await updateToolGatewaySettings(admin, true)).toEqual({
+        enabled: true,
+        canManageOrganization: true
+      });
     });
 
     test("input validation rejects unexpected properties before invocation", async () => {
@@ -480,6 +503,59 @@ if (!databaseUrl) {
         input: { a: 9, b: 9 }
       });
       expect(third.status).toBe("approval_required");
+    });
+
+    test("OpenAPI discovery records health, catalog changes, policy, and invokes through the gateway", async () => {
+      const principal = await seedPrincipal("admin");
+      const connection = await createToolConnection(principal, {
+        scope: "organization",
+        source: "openapi",
+        label: "Mock OpenAPI",
+        endpoint: { url: endpoint.replace("/mcp", "/openapi.json") }
+      });
+      expect(connection.health.status).toBe("unknown");
+
+      const definitions = await discoverConnectionCatalog(
+        principal,
+        connection.id,
+        new AbortController().signal
+      );
+      expect(definitions).toHaveLength(1);
+      expect(definitions[0]).toMatchObject({
+        externalName: "getPet",
+        policy: {
+          decision: "approve",
+          reasons: ["tool_destructive", "tool_open_world"]
+        }
+      });
+      expect((await listToolConnections(principal))[0]).toMatchObject({
+        catalogChanged: false,
+        health: { status: "healthy", errorCode: null }
+      });
+
+      const first = await invokeTool(principal, {
+        connectionId: connection.id,
+        toolName: "getPet",
+        input: { path: { petId: "42" }, query: { detail: true } }
+      });
+      expect(first.status).toBe("approval_required");
+      if (first.status !== "approval_required") return;
+      await decideToolApproval(principal, first.approval.approvalId, true);
+      const result = await invokeTool(principal, {
+        connectionId: connection.id,
+        toolName: "getPet",
+        input: { path: { petId: "42" }, query: { detail: true } }
+      });
+      expect(result).toMatchObject({
+        status: "succeeded",
+        result: { structured: { id: "42", detail: true } }
+      });
+
+      openApiVersion = 2;
+      await discoverConnectionCatalog(principal, connection.id, new AbortController().signal);
+      expect((await listToolConnections(principal))[0]?.catalogChanged).toBe(true);
+      await discoverConnectionCatalog(principal, connection.id, new AbortController().signal);
+      expect((await listToolConnections(principal))[0]?.catalogChanged).toBe(false);
     });
 
     test("an approval granted for one run does not authorize another run", async () => {
@@ -983,8 +1059,57 @@ function restoreEnv(name: string, value: string | undefined) {
 
 let authHeaderSink: ((value: string) => void) | undefined;
 let toolCallSink: (() => void) | undefined;
+let openApiVersion = 1;
 
 async function mcpMock(request: Request): Promise<Response> {
+  const url = new URL(request.url);
+  if (url.pathname === "/openapi.json") {
+    return Response.json({
+      openapi: "3.1.0",
+      info: { title: "Mock", version: String(openApiVersion) },
+      servers: [{ url: url.origin }],
+      paths: {
+        "/pets/{petId}": {
+          get: {
+            operationId: "getPet",
+            summary: "Get pet",
+            parameters: [
+              {
+                name: "petId",
+                in: "path",
+                required: true,
+                schema: { type: "string" }
+              },
+              {
+                name: "detail",
+                in: "query",
+                schema: { type: openApiVersion === 1 ? "boolean" : "string" }
+              }
+            ],
+            responses: {
+              "200": {
+                description: "ok",
+                content: {
+                  "application/json": {
+                    schema: { type: "object" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    });
+  }
+  if (url.pathname === "/pets/42") {
+    return Response.json({
+      id: "42",
+      detail: url.searchParams.get("detail") === "true"
+    });
+  }
+  if (request.method === "GET") {
+    return new Response("not found", { status: 404 });
+  }
   const auth = request.headers.get("authorization");
   if (auth && authHeaderSink) {
     authHeaderSink(auth);

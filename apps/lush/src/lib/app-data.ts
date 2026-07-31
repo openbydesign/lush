@@ -178,6 +178,13 @@ export const settingsRoutes: Route[] = [
     eyebrow: "Organization settings",
     title: "Inference",
     body: ""
+  },
+  {
+    href: "/settings/tools",
+    label: "Tools",
+    eyebrow: "Organization settings",
+    title: "Tools",
+    body: ""
   }
 ];
 

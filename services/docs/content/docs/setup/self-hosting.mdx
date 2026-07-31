@@ -104,6 +104,15 @@ Generate `LUSH_SECRET_KEY`:
 openssl rand -hex 32
 ```
 
+Generate a separate tool credential-encryption root:
+
+```sh
+openssl rand -hex 32
+```
+
+Store that second value as `LUSH_TOOL_CREDENTIAL_KEY`. It must not reuse
+`LUSH_SECRET_KEY`.
+
 Generate the JWT signing key with the exact API image being deployed:
 
 ```sh
@@ -167,6 +176,7 @@ booleans, key sets, proxy ranges, and required values fail startup.
 | --- | --- |
 | `DATABASE_URL` | PostgreSQL connection string. |
 | `LUSH_SECRET_KEY` | HMAC key material and the root secret for encrypted inference-provider credentials. |
+| `LUSH_TOOL_CREDENTIAL_KEY` | Dedicated root for HKDF-derived tool credential encryption. |
 | `LUSH_APP_ORIGIN` | Comma-separated browser origins allowed to make credentialed API requests. Wildcards are rejected. |
 | `LUSH_AUTH_JWT_KEY_ID` | Active RS256 signing-key ID. |
 | `LUSH_AUTH_JWT_PRIVATE_KEY` | Active RS256 private signing key. |
@@ -178,6 +188,7 @@ Important optional values:
 | Variable | Default | Notes |
 | --- | --- | --- |
 | `LUSH_DB_POOL_SIZE` | `10` | Per API process. Size the database for total replica count. |
+| `LUSH_TOOL_CREDENTIAL_KEY_PREVIOUS` | empty | Comma-separated prior tool roots accepted for lazy read/re-encryption during rotation. Remove only after all old envelopes have been exercised or explicitly rewritten. |
 | `LUSH_AUTH_PASSWORD_ENABLED` | `true` | Disable only after another login path is fully implemented. |
 | `LUSH_AUTH_SIGNUP_ENABLED` | `true` | Controls new password registrations. |
 | `LUSH_AUTH_PUBLIC_SIGNUP` | `true` | Hides whether an address already has an account. |

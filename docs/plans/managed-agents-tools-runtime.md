@@ -1184,10 +1184,11 @@ production roadmap. The current issue map is:
 | Artifact storage and usage events | [#57](https://github.com/openbydesign/lush/issues/57), [#54](https://github.com/openbydesign/lush/issues/54) |
 | Streaming/ingress and forward-only migrations | [#51](https://github.com/openbydesign/lush/issues/51), [#52](https://github.com/openbydesign/lush/issues/52) |
 | OpenTelemetry | [#68](https://github.com/openbydesign/lush/issues/68), [#71](https://github.com/openbydesign/lush/issues/71), [#70](https://github.com/openbydesign/lush/issues/70) |
+| Tool control plane and direct invocation | [#107](https://github.com/openbydesign/lush/issues/107), [#103](https://github.com/openbydesign/lush/issues/103) |
 | Existing local Code correctness/security prerequisites | [#14](https://github.com/openbydesign/lush/issues/14), [#15](https://github.com/openbydesign/lush/issues/15), [#16](https://github.com/openbydesign/lush/issues/16), [#17](https://github.com/openbydesign/lush/issues/17), [#18](https://github.com/openbydesign/lush/issues/18), [#19](https://github.com/openbydesign/lush/issues/19), [#21](https://github.com/openbydesign/lush/issues/21) |
 
-No dedicated issue yet covers the tool connection/gateway, managed-agent
-definition and installation model, provider-neutral inference tool loop,
+No dedicated issue yet covers the managed-agent definition and installation
+model, provider-neutral inference tool loop,
 managed-agent editor, or skill/memory phases. Those gaps are explicitly listed
 in #72 and should be split into focused implementation issues before their
 respective phases begin.
@@ -1245,6 +1246,10 @@ assistant responses survive client disconnects, cancellation is durable, and
 first-token latency is measured against the current path.
 
 ### Phase 2: tool control plane and direct test invocation
+
+Primary tracking: [#107](https://github.com/openbydesign/lush/issues/107), with
+credential key separation and rotation in
+[#103](https://github.com/openbydesign/lush/issues/103).
 
 1. Implement organization and user connections, encrypted credential refs,
    normalized definitions, health, catalog versions, and policy explanations.
