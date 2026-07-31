@@ -232,7 +232,10 @@ export async function invokeTool(
   }
 
   const limits: ConnectorLimits = {
-    timeoutMs: options.limits?.timeoutMs ?? defaultConnectorLimits.timeoutMs,
+    timeoutMs:
+      definition.timeoutMs ??
+      options.limits?.timeoutMs ??
+      defaultConnectorLimits.timeoutMs,
     maxResponseBytes:
       options.limits?.maxResponseBytes ?? defaultConnectorLimits.maxResponseBytes
   };

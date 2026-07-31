@@ -329,6 +329,38 @@ if (!databaseUrl) {
       ).rejects.toMatchObject({ code: "input_invalid" });
     });
 
+    test("tool JSON Schemas preserve provider-defined snake_case property names", async () => {
+      const principal = await seedPrincipal("admin");
+      const { definitions } = await allowedMcpConnection(principal);
+      const definition = definitions.find((candidate) => candidate.externalName === "echo")!;
+      const inputSchema = {
+        type: "object",
+        properties: {
+          search_queries: { type: "array", items: { type: "string" } }
+        },
+        required: ["search_queries"],
+        additionalProperties: false
+      };
+
+      await getDb()
+        .updateTable("toolDefinitions")
+        .set({ inputSchema })
+        .where("id", "=", definition.id)
+        .execute();
+
+      const loaded = await getDb()
+        .selectFrom("toolDefinitions")
+        .select("inputSchema")
+        .where("id", "=", definition.id)
+        .executeTakeFirstOrThrow();
+      expect(loaded.inputSchema).toEqual(inputSchema);
+      expect(validateInput(loaded.inputSchema, { search_queries: "not-an-array" }))
+        .toEqual({
+          ok: false,
+          errors: ["$.search_queries: expected array"]
+        });
+    });
+
     test("malformed resource identifiers fail as client errors", async () => {
       const principal = await seedPrincipal("admin");
       await expect(requireVisibleConnection(principal, "not-a-uuid")).rejects.toMatchObject({
@@ -470,6 +502,37 @@ if (!databaseUrl) {
         input: {}
       });
       expect(outcome).toMatchObject({ status: "denied", reason: "tool_disabled" });
+    });
+
+    test("definition timeout overrides are validated and enforced by the gateway", async () => {
+      const principal = await seedPrincipal("admin");
+      const { connection, definitions } = await allowedMcpConnection(principal);
+      const definition = definitions.find((candidate) => candidate.externalName === "echo")!;
+
+      const updated = await updateToolDefinition(principal, {
+        definitionId: definition.id,
+        timeoutMs: 1_000
+      });
+      expect(updated.timeoutMs).toBe(1_000);
+      await expect(updateToolDefinition(principal, {
+        definitionId: definition.id,
+        timeoutMs: 999
+      })).rejects.toMatchObject({ code: "invalid_definition_timeout" });
+
+      const startedAt = Date.now();
+      const outcome = await invokeTool(principal, {
+        connectionId: connection.id,
+        toolName: "echo",
+        input: { message: "slow" }
+      });
+      expect(outcome.status).toBe("failed");
+      expect(Date.now() - startedAt).toBeLessThan(2_500);
+
+      const restored = await updateToolDefinition(principal, {
+        definitionId: definition.id,
+        timeoutMs: null
+      });
+      expect(restored.timeoutMs).toBeNull();
     });
 
     test("MCP connection: discover, invoke over SSE, and enforce the approval binding", async () => {
@@ -1287,8 +1350,15 @@ async function mcpMock(request: Request): Promise<Response> {
     case "tools/call": {
       toolCallSink?.();
       const name = body.params?.name;
-      const args = (body.params?.arguments ?? {}) as { a?: number; b?: number };
+      const args = (body.params?.arguments ?? {}) as {
+        a?: number;
+        b?: number;
+        message?: string;
+      };
       if (name === "echo") {
+        if (args.message === "slow") {
+          await new Promise((resolve) => setTimeout(resolve, 1_200));
+        }
         const encoder = new TextEncoder();
         const stream = new ReadableStream<Uint8Array>({
           start(controller) {

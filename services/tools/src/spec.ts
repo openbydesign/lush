@@ -51,6 +51,7 @@ export type ToolDefinition = {
   annotations: unknown;
   definitionDigest: string;
   enabled: boolean;
+  timeoutMs: number | null;
   policy: {
     decision: "allow" | "approve" | "deny";
     reasons: string[];
@@ -83,7 +84,8 @@ export type UpdateToolConnectionRequest = {
 
 export type UpdateToolDefinitionRequest = {
   definitionId: string;
-  enabled: boolean;
+  enabled?: boolean;
+  timeoutMs?: number | null;
 };
 
 export type ToolGatewaySettings = {

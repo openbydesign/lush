@@ -8,11 +8,14 @@ import type {
   AgentRunRow,
   AgentRunStatus,
   Database,
-  SessionMessageRow
+  SessionMessageRow,
+  ToolAnnotations,
+  ToolSource
 } from "@lush/db/schema";
 import { getInferenceConfig } from "@lush/inference/runtime";
 import { messageByteSize } from "@lush/sessions/runtime";
 import { canonicalJson, sha256Hex } from "@lush/tools/digest";
+import { decideApproval } from "@lush/tools/gateway";
 import type { Kysely, Transaction } from "kysely";
 import { lushAgent } from "./agents/lush";
 import { normalizeAgentChatMessages } from "./chat-request";
@@ -46,6 +49,31 @@ export type AgentRunConfigurationV1 = {
   modelSelection: string;
   messages: AgentChatMessage[];
   project?: ProjectAgentContext;
+};
+
+export type AgentRunToolCapability = {
+  definitionId: string;
+  connectionId: string;
+  connectionLabel: string;
+  connectionSource: ToolSource;
+  connectionIconUrl?: string;
+  name: string;
+  externalName: string;
+  title: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+  definitionDigest: string;
+  timeoutMs: number | null;
+  annotations: ToolAnnotations;
+};
+
+export type AgentRunCapabilitiesV1 = {
+  version: 1;
+  principal: { organizationId: string; userId: string };
+  inference: { modelSelection: string };
+  tools: AgentRunToolCapability[];
+  executableSkills: unknown[];
+  runtimeMemory: unknown[];
 };
 
 export type AgentRun = {
@@ -255,14 +283,15 @@ export async function createAgentRun(
       ...(context.project ? { project: context.project } : {})
     };
     const configurationDigest = await sha256Hex(canonicalJson(configuration));
-    const capabilities = {
+    const tools = await resolveRunTools(trx, principal, thread.id);
+    const capabilities: AgentRunCapabilitiesV1 = {
       version: 1,
       principal: {
         organizationId: principal.organizationId,
         userId: principal.userId
       },
       inference: { modelSelection: selectedModel },
-      tools: [],
+      tools,
       executableSkills: [],
       runtimeMemory: []
     };
@@ -385,6 +414,120 @@ export async function createAgentRun(
 
     return { run: toRun(run), created: true };
   });
+}
+
+async function resolveRunTools(
+  trx: Transaction<Database>,
+  principal: AgentRunPrincipal,
+  sessionId: string
+): Promise<AgentRunToolCapability[]> {
+  const organization = await trx.selectFrom("organizations")
+    .select("toolGatewayEnabled")
+    .where("id", "=", principal.organizationId)
+    .executeTakeFirst();
+  if (organization?.toolGatewayEnabled !== true) return [];
+
+  const snapshot = await trx.selectFrom("sessionStateSnapshots")
+    .select("state")
+    .where("threadId", "=", sessionId)
+    .where("organizationId", "=", principal.organizationId)
+    .where("kind", "=", "chat_tool_selection")
+    .orderBy("createdAt", "desc")
+    .orderBy("id", "desc")
+    .executeTakeFirst();
+  const disabled = disabledToolIds(snapshot?.state);
+  const connections = await trx.selectFrom("toolConnections")
+    .select(["id", "label", "source", "endpointConfig", "policy"])
+    .where("organizationId", "=", principal.organizationId)
+    .where("enabled", "=", true)
+    .where((eb) => eb.or([
+      eb("ownerUserId", "is", null),
+      eb("ownerUserId", "=", principal.userId)
+    ]))
+    .execute();
+  if (connections.length === 0) return [];
+  const policyByConnection = new Map(
+    connections.map((connection) => [connection.id, connection.policy])
+  );
+  const presentationByConnection = new Map(
+    connections.map((connection) => [connection.id, {
+      label: connection.label,
+      source: connection.source,
+      iconUrl: connectionIconUrl(connection.endpointConfig)
+    }])
+  );
+  const definitions = await trx.selectFrom("toolDefinitions")
+    .select([
+      "id",
+      "connectionId",
+      "externalName",
+      "qualifiedName",
+      "title",
+      "description",
+      "inputSchema",
+      "definitionDigest",
+      "timeoutMs",
+      "annotations"
+    ])
+    .where("connectionId", "in", connections.map((connection) => connection.id))
+    .where("enabled", "=", true)
+    .orderBy("qualifiedName", "asc")
+    .execute();
+
+  return definitions.flatMap((definition) => {
+    if (disabled.has(definition.id)) return [];
+    const annotations = definition.annotations as ToolAnnotations;
+    if (decideApproval(annotations, policyByConnection.get(definition.connectionId)) === "deny") {
+      return [];
+    }
+    return [{
+      definitionId: definition.id,
+      connectionId: definition.connectionId,
+      connectionLabel:
+        presentationByConnection.get(definition.connectionId)?.label ?? "Tool",
+      connectionSource:
+        presentationByConnection.get(definition.connectionId)?.source ?? "native",
+      ...(presentationByConnection.get(definition.connectionId)?.iconUrl
+        ? { connectionIconUrl: presentationByConnection.get(definition.connectionId)!.iconUrl }
+        : {}),
+      name: definition.qualifiedName,
+      externalName: definition.externalName,
+      title: definition.title,
+      description: definition.description,
+      inputSchema: isRecord(definition.inputSchema) ? definition.inputSchema : {},
+      definitionDigest: definition.definitionDigest,
+      timeoutMs: definition.timeoutMs,
+      annotations
+    }];
+  });
+}
+
+function connectionIconUrl(endpointConfig: unknown): string | undefined {
+  if (!isRecord(endpointConfig) || typeof endpointConfig.url !== "string") {
+    return undefined;
+  }
+  try {
+    const endpoint = new URL(endpointConfig.url);
+    if (endpoint.protocol !== "https:" && endpoint.protocol !== "http:") {
+      return undefined;
+    }
+    return new URL("/favicon.ico", endpoint.origin).toString();
+  } catch {
+    return undefined;
+  }
+}
+
+function disabledToolIds(value: unknown) {
+  if (!isRecord(value) || value.version !== 1 || !Array.isArray(value.disabledToolDefinitionIds)) {
+    return new Set<string>();
+  }
+  return new Set(value.disabledToolDefinitionIds.filter(
+    (id): id is string => typeof id === "string"
+  ));
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 export async function fetchAgentRun(
@@ -532,7 +675,10 @@ export async function appendRunEvent(
     .forUpdate().executeTakeFirstOrThrow();
   if (
     expectedLeaseOwner &&
-    (locked.status !== "running" || locked.leaseOwner !== expectedLeaseOwner)
+    (
+      (locked.status !== "running" && locked.status !== "waiting_for_approval") ||
+      locked.leaseOwner !== expectedLeaseOwner
+    )
   ) {
     throw new AgentRunError("run_lease_lost", "Run execution lease was lost", 409);
   }

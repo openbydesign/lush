@@ -1,6 +1,9 @@
 import {
   streamInferenceChat,
-  type InferenceChatMessage
+  streamInferenceTurn,
+  type InferenceChatMessage,
+  type InferenceTool,
+  type InferenceTurnMessage
 } from "@lush/inference/runtime";
 import { lushAgent } from "./agents/lush";
 
@@ -54,6 +57,53 @@ export async function* streamLushAgentChat({
     messages: messages.map(toInferenceMessage),
     signal
   });
+}
+
+export async function* streamLushAgentTurn(options: {
+  organizationId: string;
+  instructions?: string;
+  modelSelection?: string;
+  messages: Array<AgentChatMessage | Exclude<InferenceTurnMessage, {
+    role: "system";
+  }>>;
+  tools: InferenceTool[];
+  project?: ProjectAgentContext;
+  signal: AbortSignal;
+}) {
+  if (options.tools.length === 0) {
+    yield* textEvents(streamLushAgentChat({
+      organizationId: options.organizationId,
+      instructions: options.instructions,
+      modelSelection: options.modelSelection,
+      messages: options.messages.filter(
+        (message): message is AgentChatMessage =>
+          "content" in message &&
+          (message.role === "user" || message.role === "assistant")
+      ),
+      project: options.project,
+      signal: options.signal
+    }));
+    return;
+  }
+  yield* streamInferenceTurn({
+    organizationId: options.organizationId,
+    modelSelection: options.modelSelection,
+    systemPrompt: projectSystemPrompt(
+      options.instructions ?? lushAgent.systemPrompt,
+      options.project
+    ),
+    messages: options.messages.map((message) =>
+      "content" in message && (message.role === "user" || message.role === "assistant")
+        ? toInferenceMessage(message as AgentChatMessage)
+        : message as Exclude<InferenceTurnMessage, { role: "system" }>
+    ),
+    tools: options.tools,
+    signal: options.signal
+  });
+}
+
+async function* textEvents(chunks: AsyncGenerator<string>) {
+  for await (const delta of chunks) yield { type: "text_delta" as const, delta };
 }
 
 export function projectSystemPrompt(

@@ -440,14 +440,40 @@ export type AgentStreamEvent =
       type: "tool-input";
       toolCallId: string;
       toolName: string;
+      toolTitle?: string;
+      connectionLabel?: string;
+      connectionSource?: "mcp" | "openapi" | "native";
+      connectionIconUrl?: string;
       input: unknown;
     }
   | {
       type: "tool-output";
       toolCallId: string;
       toolName: string;
+      toolTitle?: string;
+      connectionLabel?: string;
+      connectionSource?: "mcp" | "openapi" | "native";
+      connectionIconUrl?: string;
       output?: unknown;
       errorText?: string;
+    }
+  | {
+      type: "tool-approval-required";
+      approvalId: string;
+      toolCallId: string;
+      toolName: string;
+      toolTitle?: string;
+      connectionLabel?: string;
+      connectionSource?: "mcp" | "openapi" | "native";
+      connectionIconUrl?: string;
+      expiresAt: string;
+    }
+  | {
+      type: "tool-approval-resolved";
+      approvalId: string;
+      toolCallId: string;
+      toolName: string;
+      decision: "approved" | "denied" | "expired";
     }
   | { type: "source"; sourceId: string; url: string; title: string }
   | {
@@ -572,6 +598,7 @@ export type ToolDefinition = {
   annotations: unknown;
   definitionDigest: string;
   enabled: boolean;
+  timeoutMs: number | null;
   policy: {
     decision: "allow" | "approve" | "deny";
     reasons: string[];
@@ -604,7 +631,8 @@ export type UpdateToolConnectionRequest = {
 
 export type UpdateToolDefinitionRequest = {
   definitionId: string;
-  enabled: boolean;
+  enabled?: boolean;
+  timeoutMs?: number | null;
 };
 
 export type ToolGatewaySettings = {

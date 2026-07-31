@@ -84,30 +84,42 @@ function DropdownMenuCheckboxItem({
   children,
   checked,
   inset,
+  indicator = "check",
   ...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.CheckboxItem> & {
   inset?: boolean
+  indicator?: "check" | "switch"
 }) {
   return (
     <DropdownMenuPrimitive.CheckboxItem
       data-slot="dropdown-menu-checkbox-item"
       data-inset={inset}
       className={cn(
-        "relative flex cursor-default items-center gap-1.5 rounded-md py-1 pr-8 pl-1.5 text-sm outline-hidden select-none focus:bg-accent focus:text-accent-foreground focus:**:text-accent-foreground data-inset:pl-7 data-disabled:pointer-events-none data-disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
+        "group/dropdown-menu-checkbox relative flex cursor-default items-center gap-1.5 rounded-md py-1 pr-8 pl-1.5 text-sm outline-hidden select-none focus:bg-accent focus:text-accent-foreground focus:**:text-accent-foreground data-inset:pl-7 data-disabled:pointer-events-none data-disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
+        indicator === "switch" && "pr-12",
         className
       )}
       checked={checked}
       {...props}
     >
-      <span
-        className="pointer-events-none absolute right-2 flex items-center justify-center"
-        data-slot="dropdown-menu-checkbox-item-indicator"
-      >
-        <DropdownMenuPrimitive.ItemIndicator>
-          <CheckIcon
-          />
-        </DropdownMenuPrimitive.ItemIndicator>
-      </span>
+      {indicator === "switch" ? (
+        <span
+          aria-hidden="true"
+          className="pointer-events-none absolute right-2 h-5 w-9 rounded-full bg-muted-foreground/35 transition-colors group-data-[state=checked]/dropdown-menu-checkbox:bg-primary"
+          data-slot="dropdown-menu-checkbox-item-indicator"
+        >
+          <span className="absolute left-0.5 top-0.5 size-4 rounded-full bg-background shadow-sm transition-transform group-data-[state=checked]/dropdown-menu-checkbox:translate-x-4" />
+        </span>
+      ) : (
+        <span
+          className="pointer-events-none absolute right-2 flex items-center justify-center"
+          data-slot="dropdown-menu-checkbox-item-indicator"
+        >
+          <DropdownMenuPrimitive.ItemIndicator>
+            <CheckIcon />
+          </DropdownMenuPrimitive.ItemIndicator>
+        </span>
+      )}
       {children}
     </DropdownMenuPrimitive.CheckboxItem>
   )

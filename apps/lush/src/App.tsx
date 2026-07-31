@@ -90,6 +90,7 @@ import {
   preferNewestSessionSnapshot
 } from "./lib/chat-session-state";
 import { chatModelSelectionState } from "./lib/chat-model-selection";
+import { chatToolSelectionState } from "./lib/chat-tool-selection";
 import { inferenceProviderErrorMessage } from "./lib/inference-provider-error";
 import { abortableDelay, readClientEventStream } from "./lib/client-event-stream";
 import type { Appearance, SessionStatus } from "./lib/types";
@@ -1168,6 +1169,16 @@ function useAppController() {
     );
   };
 
+  const recordChatToolSelection = async (
+    sessionId: string,
+    disabledToolDefinitionIds: string[]
+  ) => {
+    await appendChatSessionState(
+      sessionId,
+      chatToolSelectionState(disabledToolDefinitionIds)
+    );
+  };
+
   const archiveChatSession = async (sessionId: string) => {
     await runAuthenticated((session) =>
       archiveSession(apiBaseUrl, sessionId, session.accessToken, {})
@@ -1315,6 +1326,7 @@ function useAppController() {
     updateChatSessionTitle,
     recordChatMessageFeedback,
     recordChatModelSelection,
+    recordChatToolSelection,
     archiveChatSession
   };
 }

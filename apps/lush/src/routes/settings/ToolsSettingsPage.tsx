@@ -47,6 +47,7 @@ export function ToolsSettingsPage(props: {
   const [secret, setSecret] = useState("");
   const [testInputs, setTestInputs] = useState<Record<string, string>>({});
   const [testResults, setTestResults] = useState<Record<string, string>>({});
+  const [timeoutInputs, setTimeoutInputs] = useState<Record<string, string>>({});
   const [approval, setApproval] = useState<PendingApproval>();
 
   const request = props.runApiRequest;
@@ -193,6 +194,39 @@ export function ToolsSettingsPage(props: {
     }));
   });
 
+  const saveDefinitionTimeout = (definition: ToolDefinition) =>
+    run(`timeout:${definition.id}`, async () => {
+      const raw = (
+        timeoutInputs[definition.id] ??
+        (definition.timeoutMs === null ? "" : String(definition.timeoutMs / 1_000))
+      ).trim();
+      const seconds = raw === "" ? null : Number(raw);
+      if (
+        seconds !== null &&
+        (!Number.isInteger(seconds) || seconds < 1 || seconds > 90)
+      ) {
+        throw new Error("Timeout must be a whole number from 1 through 90 seconds");
+      }
+      const timeoutMs = seconds === null ? null : seconds * 1_000;
+      const updated = await request((token) =>
+        updateToolDefinition(props.apiBaseUrl, token, {
+          definitionId: definition.id,
+          timeoutMs
+        })
+      );
+      setDefinitions((current) => ({
+        ...current,
+        [definition.connectionId]: (current[definition.connectionId] ?? []).map((item) =>
+          item.id === updated.id ? updated : item
+        )
+      }));
+      setTimeoutInputs((current) => {
+        const next = { ...current };
+        delete next[definition.id];
+        return next;
+      });
+    });
+
   const testDefinition = (
     connection: ToolConnection,
     definition: ToolDefinition
@@ -273,7 +307,8 @@ export function ToolsSettingsPage(props: {
   const definitionDetails = (
     connection: ToolConnection,
     definition: ToolDefinition,
-    manageable: boolean
+    manageable: boolean,
+    showToggle = true
   ) => (
     <div className="mt-3 border-t border-[var(--color-border)] pt-3">
       <p className="text-sm text-[var(--color-muted)]">{definition.description}</p>
@@ -281,10 +316,42 @@ export function ToolsSettingsPage(props: {
         {definition.externalName} · {definition.policy.decision}: {definition.policy.reasons.join(", ")}
       </p>
       <code className="mt-2 block text-[0.625rem] text-[var(--color-muted)]">{definition.definitionDigest}</code>
+      <div className="mt-3 flex items-end gap-2">
+        <Field label="Timeout (seconds)">
+          <input
+            type="number"
+            min="1"
+            max="90"
+            step="1"
+            disabled={!manageable}
+            placeholder="Default (30)"
+            value={
+              timeoutInputs[definition.id] ??
+              (definition.timeoutMs === null ? "" : String(definition.timeoutMs / 1_000))
+            }
+            onInput={(event) => setTimeoutInputs((current) => ({
+              ...current,
+              [definition.id]: event.currentTarget.value
+            }))}
+            className={`${inputClass} w-40`}
+            aria-label={`Timeout in seconds for ${definition.externalName}`}
+          />
+        </Field>
+        {manageable ? (
+          <button
+            type="button"
+            disabled={pending === `timeout:${definition.id}`}
+            onClick={() => void saveDefinitionTimeout(definition)}
+            className={buttonClass}
+          >
+            Save timeout
+          </button>
+        ) : null}
+      </div>
       <textarea value={testInputs[definition.id] ?? "{}"} onInput={(event) => setTestInputs((current) => ({ ...current, [definition.id]: event.currentTarget.value }))} className={`${inputClass} mt-3 min-h-20 font-mono`} aria-label={`JSON input for ${definition.externalName}`} />
       <div className="mt-2 flex gap-2">
         <button type="button" disabled={!definition.enabled} onClick={() => void testDefinition(connection, definition)} className={buttonClass}>Test through gateway</button>
-        {manageable ? <button type="button" onClick={() => void toggleDefinition(definition)} className={buttonClass}>{definition.enabled ? "Disable" : "Enable"}</button> : null}
+        {manageable && showToggle ? <button type="button" onClick={() => void toggleDefinition(definition)} className={buttonClass}>{definition.enabled ? "Disable" : "Enable"}</button> : null}
       </div>
       {testResults[definition.id] ? <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap rounded bg-black/20 p-2 text-xs">{testResults[definition.id]}</pre> : null}
     </div>
@@ -373,7 +440,9 @@ export function ToolsSettingsPage(props: {
                       {manageable ? <button type="button" onClick={() => void toggleDefinition(definition)} className={buttonClass}>{definition.enabled ? "Disable" : "Enable"}</button> : null}
                     </div>
                   </div>
-                  {expanded === definition.id ? definitionDetails(connection, definition, false) : null}
+                  {expanded === definition.id
+                    ? definitionDetails(connection, definition, manageable, false)
+                    : null}
                 </article>
               );
             })}

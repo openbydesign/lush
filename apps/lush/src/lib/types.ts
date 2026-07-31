@@ -38,7 +38,10 @@ export type ChatAttachmentPart = {
 export type ChatToolState =
   | "input-streaming"
   | "input-available"
+  | "approval-requested"
+  | "approval-responded"
   | "output-available"
+  | "output-denied"
   | "output-error";
 
 export type ChatMessagePart =
@@ -49,10 +52,17 @@ export type ChatMessagePart =
       type: "tool";
       toolCallId: string;
       toolName: string;
+      toolTitle?: string;
+      connectionLabel?: string;
+      connectionSource?: "mcp" | "openapi" | "native";
+      connectionIconUrl?: string;
       state: ChatToolState;
       input?: unknown;
       output?: unknown;
       errorText?: string;
+      approvalId?: string;
+      approvalExpiresAt?: string;
+      approvalDecision?: "approved" | "denied" | "expired";
     }
   | { type: "source"; sourceId: string; url: string; title: string }
   | {

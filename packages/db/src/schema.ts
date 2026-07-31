@@ -531,6 +531,7 @@ export type ToolDefinitionsTable = {
   sourceMetadata: unknown;
   definitionDigest: string;
   enabled: boolean;
+  timeoutMs: Generated<number | null>;
   createdAt: Timestamp;
   updatedAt: Timestamp;
 };

@@ -22,7 +22,10 @@ export function createDb(options: { databaseUrl?: string; service?: DatabaseServ
         max: optionalNumberEnv("LUSH_DB_POOL_SIZE", 10)
       })
     }),
-    plugins: [new CamelCasePlugin()]
+    // JSON columns are application payloads, not database identifiers. In
+    // particular, externally supplied JSON Schemas must retain property names
+    // such as `search_queries` exactly as declared by their tool provider.
+    plugins: [new CamelCasePlugin({ maintainNestedObjectKeys: true })]
   });
 }
 
