@@ -550,6 +550,7 @@ export async function appendSessionMessage(
     }
 
     assertThreadCanAcceptWrite(thread);
+    assertNoActiveRun(thread);
     assertThreadLimit(thread.stateBytes, body.byteSize);
     const now = new Date();
     const message = await trx
@@ -611,6 +612,7 @@ export async function appendSessionState(
     }
 
     assertThreadCanAcceptWrite(thread);
+    assertNoActiveRun(thread);
     assertThreadLimit(thread.stateBytes, body.byteSize);
     const now = new Date();
     const snapshot = await trx
@@ -668,6 +670,7 @@ export async function truncateSession(
       );
     }
     assertThreadCanAcceptWrite(thread);
+    assertNoActiveRun(thread);
 
     const [messages, snapshots] = await Promise.all([
       trx
@@ -755,6 +758,7 @@ export async function archiveSession(
         404
       );
     }
+    assertNoActiveRun(current);
 
     const settings = await getSessionSettingsForOrganization(
       trx,
@@ -1270,6 +1274,16 @@ function assertThreadCanAcceptWrite(thread: SessionThreadRow) {
     throw new SessionStateError(
       "session_thread_archived",
       "Session thread has been archived",
+      409
+    );
+  }
+}
+
+function assertNoActiveRun(thread: SessionThreadRow) {
+  if (thread.currentRunId) {
+    throw new SessionStateError(
+      "session_run_in_progress",
+      "Session has an active agent run",
       409
     );
   }

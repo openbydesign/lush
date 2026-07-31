@@ -11,7 +11,7 @@ import {
   parseRunConfiguration,
   type AgentRunPrincipal
 } from "../services/agent/src/runs";
-import { createSession } from "../services/sessions/src/runtime";
+import { createSession, truncateSession } from "../services/sessions/src/runtime";
 import { integrationDatabaseUrl } from "./integration-database";
 
 const databaseUrl = integrationDatabaseUrl();
@@ -81,6 +81,13 @@ if (!databaseUrl) {
         sessionId,
         runRequest("same-key", "different")
       )).rejects.toMatchObject({ code: "idempotency_mismatch", status: 409 });
+    });
+
+    test("prevents history mutation while a run is active", async () => {
+      const { principal, sessionId } = await seedSession();
+      await createAgentRun(principal, sessionId, runRequest("active", "hold"));
+      await expect(truncateSession(principal, sessionId, { afterMessageId: null }))
+        .rejects.toMatchObject({ code: "session_run_in_progress", status: 409 });
     });
 
     test("binds access to the owning organization member", async () => {
@@ -156,6 +163,19 @@ if (!databaseUrl) {
           .where("id", "=", second.run.id).executeTakeFirstOrThrow()).configuration
       );
       expect(configuration.messages).toEqual([{ role: "user", content: "retry me" }]);
+    });
+
+    test("rejects reusing an origin that is no longer the active message boundary", async () => {
+      const { principal, sessionId } = await seedSession();
+      const first = await createAgentRun(principal, sessionId, runRequest("one", "first"));
+      await cancelAgentRun(principal, first.run.id);
+      const second = await createAgentRun(principal, sessionId, runRequest("two", "second"));
+      await cancelAgentRun(principal, second.run.id);
+
+      await expect(createAgentRun(principal, sessionId, {
+        ...runRequest("three", "first"),
+        originMessageId: first.run.originMessageId
+      })).rejects.toMatchObject({ code: "invalid_origin_message", status: 409 });
     });
 
     test("recovery finalizes an already-completed harness turn without invoking it twice", async () => {

@@ -219,8 +219,18 @@ export async function createAgentRun(
         .where("supersededAt", "is", null)
         .executeTakeFirst()
       : undefined;
+    const lastActiveMessage = body.originMessageId
+      ? await trx.selectFrom("sessionMessages").select("id")
+        .where("threadId", "=", thread.id)
+        .where("organizationId", "=", principal.organizationId)
+        .where("supersededAt", "is", null)
+        .orderBy("createdAt", "desc")
+        .orderBy("id", "desc")
+        .executeTakeFirst()
+      : undefined;
     if (body.originMessageId && (
       !reusedOrigin ||
+      lastActiveMessage?.id !== reusedOrigin.id ||
       reusedOrigin.content !== body.message.content ||
       canonicalJson(reusedOrigin.metadata ?? {}) !== canonicalJson(body.metadata)
     )) {
