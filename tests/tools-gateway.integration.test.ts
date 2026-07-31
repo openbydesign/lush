@@ -11,6 +11,7 @@ import {
   getToolGatewaySettings,
   isToolGatewayEnabled,
   listToolConnections,
+  listToolDefinitions,
   updateToolConnection,
   updateToolGatewaySettings,
   requireVisibleConnection,
@@ -231,21 +232,51 @@ if (!databaseUrl) {
       return { userId: user.id, organizationId, role };
     }
 
-    test("native connection: discover and invoke a read-only tool", async () => {
+    async function builtinConnection(
+      principal: ToolsPrincipal,
+      enabled = true
+    ) {
+      const connection = (await listToolConnections(principal)).find(
+        (candidate) => candidate.systemManaged && candidate.source === "native"
+      );
+      if (!connection) throw new Error("Built-in tool connection was not provisioned");
+      if (enabled && !connection.enabled) {
+        return updateToolConnection(principal, {
+          connectionId: connection.id,
+          enabled: true
+        });
+      }
+      return connection;
+    }
+
+    test("built-in tools are provisioned disabled and synchronized automatically", async () => {
       const principal = await seedPrincipal("admin");
-      const connection = await createToolConnection(principal, {
+      const provisioned = await builtinConnection(principal, false);
+      expect(provisioned).toMatchObject({
         scope: "organization",
         source: "native",
+        systemManaged: true,
+        enabled: false,
         label: "Built-in tools"
       });
+      const connection = await builtinConnection(principal);
       expect(connection.scope).toBe("organization");
 
-      const definitions = await discoverConnectionCatalog(
-        principal,
-        connection.id,
-        new AbortController().signal
-      );
+      const definitions = await listToolDefinitions(principal, connection.id);
       expect(definitions.map((d) => d.externalName)).toContain("current_time");
+      await expect(
+        createToolConnection(principal, {
+          scope: "organization",
+          source: "native",
+          label: "Duplicate built-in"
+        })
+      ).rejects.toMatchObject({ code: "invalid_connection" });
+      await expect(
+        discoverConnectionCatalog(principal, connection.id, new AbortController().signal)
+      ).rejects.toMatchObject({ code: "system_connection_managed" });
+      await expect(deleteToolConnection(principal, connection.id)).rejects.toMatchObject({
+        code: "system_connection_managed"
+      });
 
       const outcome = await invokeTool(principal, {
         connectionId: connection.id,
@@ -293,12 +324,7 @@ if (!databaseUrl) {
 
     test("input validation rejects unexpected properties before invocation", async () => {
       const principal = await seedPrincipal("admin");
-      const connection = await createToolConnection(principal, {
-        scope: "organization",
-        source: "native",
-        label: "Built-in"
-      });
-      await discoverConnectionCatalog(principal, connection.id, new AbortController().signal);
+      const connection = await builtinConnection(principal);
 
       await expect(
         invokeTool(principal, {
@@ -327,8 +353,9 @@ if (!databaseUrl) {
 
       const priv = await createToolConnection(owner, {
         scope: "user",
-        source: "native",
-        label: "My private tools"
+        source: "mcp",
+        label: "My private tools",
+        endpoint: { url: endpoint }
       });
 
       // Owner sees it.
@@ -344,7 +371,7 @@ if (!databaseUrl) {
       await expect(
         invokeTool(otherUser, {
           connectionId: priv.id,
-          toolName: "current_time",
+          toolName: "echo",
           input: {}
         })
       ).rejects.toMatchObject({ code: "connection_not_found" });
@@ -357,22 +384,25 @@ if (!databaseUrl) {
       await expect(
         createToolConnection(member, {
           scope: "organization",
-          source: "native",
-          label: "Shared"
+          source: "mcp",
+          label: "Shared",
+          endpoint: { url: endpoint }
         })
       ).rejects.toMatchObject({ code: "forbidden" });
 
       await expect(
         createToolConnection(member, {
-          source: "native",
-          label: "Missing scope"
+          source: "mcp",
+          label: "Missing scope",
+          endpoint: { url: endpoint }
         } as never)
       ).rejects.toMatchObject({ code: "invalid_connection" });
 
       const shared = await createToolConnection(admin, {
         scope: "organization",
-        source: "native",
-        label: "Shared"
+        source: "mcp",
+        label: "Shared",
+        endpoint: { url: endpoint }
       });
       await expect(
         updateToolConnection(member, { connectionId: shared.id, enabled: false })
@@ -407,8 +437,9 @@ if (!databaseUrl) {
 
       const noCredential = await createToolConnection(principal, {
         scope: "organization",
-        source: "native",
-        label: "No credentials"
+        source: "mcp",
+        label: "No credentials",
+        endpoint: { url: endpoint }
       });
       await expect(
         updateToolConnection(principal, {
@@ -420,13 +451,7 @@ if (!databaseUrl) {
 
     test("disabled connections deny invocation", async () => {
       const principal = await seedPrincipal("admin");
-      const connection = await createToolConnection(principal, {
-        scope: "organization",
-        source: "native",
-        label: "Built-in"
-      });
-      await discoverConnectionCatalog(principal, connection.id, new AbortController().signal);
-      await updateToolConnection(principal, { connectionId: connection.id, enabled: false });
+      const connection = await builtinConnection(principal, false);
 
       const outcome = await invokeTool(principal, {
         connectionId: connection.id,
@@ -786,16 +811,8 @@ if (!databaseUrl) {
 
     test("expiring an approval closes its pending tool call", async () => {
       const principal = await seedPrincipal("admin");
-      const connection = await createToolConnection(principal, {
-        scope: "organization",
-        source: "native",
-        label: "Built-in"
-      });
-      const [definition] = await discoverConnectionCatalog(
-        principal,
-        connection.id,
-        new AbortController().signal
-      );
+      const connection = await builtinConnection(principal);
+      const [definition] = await listToolDefinitions(principal, connection.id);
       const db = getDb();
       const past = new Date(Date.now() - 60_000);
 
@@ -891,16 +908,8 @@ if (!databaseUrl) {
 
     test("idempotency replays a failed call and rejects an in-flight one", async () => {
       const principal = await seedPrincipal("admin");
-      const connection = await createToolConnection(principal, {
-        scope: "organization",
-        source: "native",
-        label: "Built-in"
-      });
-      const [definition] = await discoverConnectionCatalog(
-        principal,
-        connection.id,
-        new AbortController().signal
-      );
+      const connection = await builtinConnection(principal);
+      const [definition] = await listToolDefinitions(principal, connection.id);
       const now = new Date();
       const emptyInputDigest = await sha256Hex(canonicalJson({}));
 
@@ -966,12 +975,7 @@ if (!databaseUrl) {
 
     test("idempotency key returns the prior successful call", async () => {
       const principal = await seedPrincipal("admin");
-      const connection = await createToolConnection(principal, {
-        scope: "organization",
-        source: "native",
-        label: "Built-in"
-      });
-      await discoverConnectionCatalog(principal, connection.id, new AbortController().signal);
+      const connection = await builtinConnection(principal);
 
       const key = crypto.randomUUID();
       const one = await invokeTool(principal, {
@@ -997,12 +1001,7 @@ if (!databaseUrl) {
 
     test("concurrent use of one idempotency key creates at most one call", async () => {
       const principal = await seedPrincipal("admin");
-      const connection = await createToolConnection(principal, {
-        scope: "organization",
-        source: "native",
-        label: "Built-in"
-      });
-      await discoverConnectionCatalog(principal, connection.id, new AbortController().signal);
+      const connection = await builtinConnection(principal);
       const key = crypto.randomUUID();
       const request = {
         connectionId: connection.id,
@@ -1027,12 +1026,7 @@ if (!databaseUrl) {
     test("idempotency is principal-scoped and rejects operation mismatches", async () => {
       const owner = await seedPrincipal("admin");
       const member = await seedMember(owner.organizationId, "user");
-      const connection = await createToolConnection(owner, {
-        scope: "organization",
-        source: "native",
-        label: "Built-in"
-      });
-      await discoverConnectionCatalog(owner, connection.id, new AbortController().signal);
+      const connection = await builtinConnection(owner);
 
       const sharedKey = crypto.randomUUID();
       const ownerCall = await invokeTool(owner, {
@@ -1105,15 +1099,32 @@ if (!databaseUrl) {
       const principal = await seedPrincipal("admin");
       const connection = await createToolConnection(principal, {
         scope: "organization",
-        source: "native",
-        label: "Built-in"
+        source: "mcp",
+        label: "Disposable MCP",
+        endpoint: { url: endpoint },
+        credentialMode: "organization",
+        secret: "temporary-secret"
       });
       await discoverConnectionCatalog(principal, connection.id, new AbortController().signal);
       await deleteToolConnection(principal, connection.id);
 
-      expect(await listToolConnections(principal)).toHaveLength(0);
-      const defs = await getDb().selectFrom("toolDefinitions").selectAll().execute();
-      expect(defs).toHaveLength(0);
+      expect((await listToolConnections(principal)).map((row) => row.id)).not.toContain(
+        connection.id
+      );
+      expect(
+        await getDb()
+          .selectFrom("toolDefinitions")
+          .selectAll()
+          .where("connectionId", "=", connection.id)
+          .execute()
+      ).toHaveLength(0);
+      expect(
+        await getDb()
+          .selectFrom("toolCredentialBindings")
+          .selectAll()
+          .where("connectionId", "=", connection.id)
+          .execute()
+      ).toHaveLength(0);
     });
   });
 }

@@ -491,6 +491,8 @@ export type ToolConnectionsTable = {
   organizationId: string;
   ownerUserId: string | null;
   source: ToolSource;
+  /** Stable identity for code-owned catalogs; null for user-managed connections. */
+  systemKey: Generated<string | null>;
   label: string;
   endpointConfig: unknown;
   credentialMode: ToolCredentialMode;

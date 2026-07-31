@@ -31,7 +31,8 @@ test("database migration ids match their ordinal prefix", () => {
     "013_agent_runs",
     "014_tool_control_plane",
     "015_tool_catalog_acknowledgment",
-    "016_tool_gateway_rollout_convergence"
+    "016_tool_gateway_rollout_convergence",
+    "017_builtin_tool_connections"
   ]);
 });
 
@@ -77,6 +78,18 @@ test("tool gateway rollout convergence restores the organization flag", async ()
   expect(migration).toContain("alter table organizations");
   expect(migration).toContain("add column if not exists tool_gateway_enabled");
   expect(migration).toContain("boolean not null default false");
+});
+
+test("built-in tool connections are singular and disabled by default", async () => {
+  const migration = await Bun.file(
+    "packages/db/src/migrations/017_builtin_tool_connections.ts"
+  ).text();
+
+  expect(migration).toContain("add column if not exists system_key text");
+  expect(migration).toContain("tool_connections_org_system_key_idx");
+  expect(migration).toContain("'lush_builtin'");
+  expect(migration).toContain("'Built-in tools'");
+  expect(migration).toContain("false,");
 });
 
 test("model capabilities are added append-only as structured JSON", async () => {

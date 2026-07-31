@@ -15,7 +15,7 @@ import {
   type ToolConnection,
   type ToolDefinition,
   type ToolGatewaySettings,
-  type ToolSource,
+  type CreatableToolSource,
   type UserRole
 } from "@lush/api-client";
 
@@ -40,7 +40,7 @@ export function ToolsSettingsPage(props: {
   const [error, setError] = useState("");
   const [pending, setPending] = useState("");
   const [formOpen, setFormOpen] = useState(false);
-  const [source, setSource] = useState<ToolSource>("mcp");
+  const [source, setSource] = useState<CreatableToolSource>("mcp");
   const [label, setLabel] = useState("");
   const [endpoint, setEndpoint] = useState("");
   const [secret, setSecret] = useState("");
@@ -102,7 +102,7 @@ export function ToolsSettingsPage(props: {
           scope,
           source,
           label,
-          ...(source === "native" ? {} : { endpoint: { url: endpoint } }),
+          endpoint: { url: endpoint },
           credentialMode: secret
             ? scope === "user" ? "user_delegated" : "organization"
             : "none",
@@ -288,9 +288,9 @@ export function ToolsSettingsPage(props: {
             <form onSubmit={submitConnection} className="mt-4 grid gap-3 rounded-md border border-[var(--color-border)] bg-[var(--color-panel)] p-3 sm:grid-cols-2">
               <Field label="Name"><input required value={label} onInput={(event) => setLabel(event.currentTarget.value)} className={inputClass} /></Field>
               <Field label="Scope"><div className={`${inputClass} text-[var(--color-muted)]`}>{organizationMode ? "Organization" : "Personal"}</div></Field>
-              <Field label="Source"><select value={source} onChange={(event) => setSource(event.currentTarget.value as ToolSource)} className={inputClass}><option value="mcp">MCP Streamable HTTP</option><option value="openapi">OpenAPI 3 JSON</option><option value="native">Native</option></select></Field>
-              {source !== "native" ? <Field label={source === "openapi" ? "OpenAPI document URL" : "MCP endpoint URL"}><input required type="url" value={endpoint} onInput={(event) => setEndpoint(event.currentTarget.value)} className={inputClass} /></Field> : <div />}
-              {source !== "native" ? <Field label="Credential (optional)"><input type="password" value={secret} onInput={(event) => setSecret(event.currentTarget.value)} className={inputClass} autoComplete="off" /></Field> : null}
+              <Field label="Source"><select value={source} onChange={(event) => setSource(event.currentTarget.value as CreatableToolSource)} className={inputClass}><option value="mcp">MCP Streamable HTTP</option><option value="openapi">OpenAPI 3 JSON</option></select></Field>
+              <Field label={source === "openapi" ? "OpenAPI document URL" : "MCP endpoint URL"}><input required type="url" value={endpoint} onInput={(event) => setEndpoint(event.currentTarget.value)} className={inputClass} /></Field>
+              <Field label="Credential (optional)"><input type="password" value={secret} onInput={(event) => setSecret(event.currentTarget.value)} className={inputClass} autoComplete="off" /></Field>
               <div className="flex items-end"><button disabled={pending === "create"} className="rounded-md bg-[var(--color-brand)] px-3 py-2 text-sm font-medium text-white disabled:opacity-50">Create</button></div>
             </form>
           ) : null}
@@ -311,10 +311,10 @@ export function ToolsSettingsPage(props: {
                     </div>
                     <div className="flex gap-2">
                       <button type="button" onClick={() => void toggleExpanded(connection)} className={buttonClass}>{expanded === connection.id ? "Hide" : "Definitions"}</button>
-                      {manageable ? <button type="button" onClick={() => void refreshCatalog(connection)} className={buttonClass}>Discover</button> : null}
-                      {manageable && connection.catalogChanged ? <button type="button" onClick={() => void acknowledgeCatalog(connection)} className={buttonClass}>Acknowledge</button> : null}
+                      {manageable && !connection.systemManaged ? <button type="button" onClick={() => void refreshCatalog(connection)} className={buttonClass}>Discover</button> : null}
+                      {manageable && !connection.systemManaged && connection.catalogChanged ? <button type="button" onClick={() => void acknowledgeCatalog(connection)} className={buttonClass}>Acknowledge</button> : null}
                       {manageable ? <button type="button" onClick={() => void toggleConnection(connection)} className={buttonClass}>{connection.enabled ? "Disable" : "Enable"}</button> : null}
-                      {manageable ? <button type="button" onClick={() => void removeConnection(connection)} className={buttonClass}>Delete</button> : null}
+                      {manageable && !connection.systemManaged ? <button type="button" onClick={() => void removeConnection(connection)} className={buttonClass}>Delete</button> : null}
                     </div>
                   </div>
                   {expanded === connection.id ? (

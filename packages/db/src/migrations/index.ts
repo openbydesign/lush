@@ -14,6 +14,7 @@ import { agentRuns } from "./013_agent_runs";
 import { toolControlPlane } from "./014_tool_control_plane";
 import { toolCatalogAcknowledgment } from "./015_tool_catalog_acknowledgment";
 import { toolGatewayRolloutConvergence } from "./016_tool_gateway_rollout_convergence";
+import { builtinToolConnections } from "./017_builtin_tool_connections";
 import type { Migration } from "./types";
 
 export const migrations: Migration[] = [
@@ -32,5 +33,6 @@ export const migrations: Migration[] = [
   agentRuns,
   toolControlPlane,
   toolCatalogAcknowledgment,
-  toolGatewayRolloutConvergence
+  toolGatewayRolloutConvergence,
+  builtinToolConnections
 ];

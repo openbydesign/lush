@@ -521,6 +521,7 @@ export type AgentRunEvent = {
 
 
 export type ToolSource = "mcp" | "openapi" | "native";
+export type CreatableToolSource = "mcp" | "openapi";
 export type ToolConnectionScope = "organization" | "user";
 export type ToolCredentialMode = "none" | "organization" | "user_delegated";
 export type ToolConnectionHealth = "unknown" | "healthy" | "unhealthy";
@@ -531,6 +532,7 @@ export type ToolConnection = {
   scope: ToolConnectionScope;
   ownerUserId: string | null;
   source: ToolSource;
+  systemManaged: boolean;
   label: string;
   endpoint: string | null;
   credentialMode: ToolCredentialMode;
@@ -582,7 +584,7 @@ export type ListToolDefinitionsResponse = {
 
 export type CreateToolConnectionRequest = {
   scope: ToolConnectionScope;
-  source: ToolSource;
+  source: CreatableToolSource;
   label: string;
   endpoint?: { url?: string; headers?: Record<string, string> };
   credentialMode?: ToolCredentialMode;
