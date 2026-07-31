@@ -1261,9 +1261,9 @@ credential key separation and rotation in
 1. Implement organization and user connections, encrypted credential refs,
    normalized definitions, health, catalog versions, persistent catalog-change
    review until a manager acknowledges the exact version, and policy explanations.
-2. Materialize code-owned native tools automatically as a system-managed
-   organization catalog, disabled by default; native is not a user-creatable
-   connection source. Implement one native read-only tool and one remote MCP
+2. Materialize code-owned native tools automatically as individually governed,
+   top-level organization tools that are disabled by default; native is not a
+   user-creatable connection source. Implement one native read-only tool and one remote MCP
    Streamable HTTP connection. Add OpenAPI import after the normalized contract
    is exercised by both native and MCP sources.
 3. Implement gateway invocation, input/output bounds, live authorization,

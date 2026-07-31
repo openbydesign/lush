@@ -81,6 +81,11 @@ export type UpdateToolConnectionRequest = {
   };
 };
 
+export type UpdateToolDefinitionRequest = {
+  definitionId: string;
+  enabled: boolean;
+};
+
 export type ToolGatewaySettings = {
   enabled: boolean;
   canManageOrganization: boolean;
@@ -206,6 +211,15 @@ export const toolsRoutes = [
     method: "GET",
     path: "/tools/connections/:connectionId/definitions",
     responseType: "ListToolDefinitionsResponse",
+    auth: true,
+    kind: "json"
+  },
+  {
+    id: "updateToolDefinition",
+    method: "POST",
+    path: "/tools/definitions/update",
+    requestType: "UpdateToolDefinitionRequest",
+    responseType: "ToolDefinition",
     auth: true,
     kind: "json"
   },

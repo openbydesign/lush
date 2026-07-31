@@ -32,7 +32,8 @@ test("database migration ids match their ordinal prefix", () => {
     "014_tool_control_plane",
     "015_tool_catalog_acknowledgment",
     "016_tool_gateway_rollout_convergence",
-    "017_builtin_tool_connections"
+    "017_builtin_tool_connections",
+    "018_builtin_tool_enablement"
   ]);
 });
 
@@ -80,7 +81,7 @@ test("tool gateway rollout convergence restores the organization flag", async ()
   expect(migration).toContain("boolean not null default false");
 });
 
-test("built-in tool connections are singular and disabled by default", async () => {
+test("migration 017 materializes a singular built-in catalog", async () => {
   const migration = await Bun.file(
     "packages/db/src/migrations/017_builtin_tool_connections.ts"
   ).text();
@@ -90,6 +91,18 @@ test("built-in tool connections are singular and disabled by default", async () 
   expect(migration).toContain("'lush_builtin'");
   expect(migration).toContain("'Built-in tools'");
   expect(migration).toContain("false,");
+});
+
+test("built-in availability is governed per tool", async () => {
+  const migration = await Bun.file(
+    "packages/db/src/migrations/018_builtin_tool_enablement.ts"
+  ).text();
+
+  expect(migration).toContain("update tool_connections");
+  expect(migration).toContain("set enabled = true");
+  expect(migration).toContain("update tool_definitions");
+  expect(migration).toContain("set enabled = false");
+  expect(migration).toContain("system_key = 'lush_builtin'");
 });
 
 test("model capabilities are added append-only as structured JSON", async () => {

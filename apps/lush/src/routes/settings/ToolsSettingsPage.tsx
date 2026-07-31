@@ -10,6 +10,7 @@ import {
   listToolConnections,
   listToolDefinitions,
   updateToolConnection,
+  updateToolDefinition,
   updateToolGatewaySettings,
   type InvokeToolResponse,
   type ToolConnection,
@@ -54,6 +55,20 @@ export function ToolsSettingsPage(props: {
       listToolConnections(props.apiBaseUrl, token)
     );
     setConnections(response.connections);
+    const builtInDefinitions = await Promise.all(
+      response.connections
+        .filter((connection) => connection.systemManaged)
+        .map(async (connection) => {
+          const result = await request((token) =>
+            listToolDefinitions(props.apiBaseUrl, connection.id, token)
+          );
+          return [connection.id, result.definitions] as const;
+        })
+    );
+    setDefinitions((current) => ({
+      ...current,
+      ...Object.fromEntries(builtInDefinitions)
+    }));
   };
 
   useEffect(() => {
@@ -163,6 +178,21 @@ export function ToolsSettingsPage(props: {
     await loadConnections();
   });
 
+  const toggleDefinition = (definition: ToolDefinition) => run(`toggle:${definition.id}`, async () => {
+    const updated = await request((token) =>
+      updateToolDefinition(props.apiBaseUrl, token, {
+        definitionId: definition.id,
+        enabled: !definition.enabled
+      })
+    );
+    setDefinitions((current) => ({
+      ...current,
+      [definition.connectionId]: (current[definition.connectionId] ?? []).map((item) =>
+        item.id === updated.id ? updated : item
+      )
+    }));
+  });
+
   const testDefinition = (
     connection: ToolConnection,
     definition: ToolDefinition
@@ -228,7 +258,37 @@ export function ToolsSettingsPage(props: {
   const visibleConnections = organizationMode
     ? connections.filter((connection) => connection.scope === "organization")
     : connections;
+  const builtInTools = visibleConnections
+    .filter((connection) => connection.systemManaged)
+    .flatMap((connection) =>
+      (definitions[connection.id] ?? []).map((definition) => ({
+        connection,
+        definition
+      }))
+    );
+  const managedConnections = visibleConnections.filter(
+    (connection) => !connection.systemManaged
+  );
   const canAddConnection = !organizationMode || isAdmin;
+  const definitionDetails = (
+    connection: ToolConnection,
+    definition: ToolDefinition,
+    manageable: boolean
+  ) => (
+    <div className="mt-3 border-t border-[var(--color-border)] pt-3">
+      <p className="text-sm text-[var(--color-muted)]">{definition.description}</p>
+      <p className="mt-2 text-xs text-[var(--color-muted)]">
+        {definition.externalName} · {definition.policy.decision}: {definition.policy.reasons.join(", ")}
+      </p>
+      <code className="mt-2 block text-[0.625rem] text-[var(--color-muted)]">{definition.definitionDigest}</code>
+      <textarea value={testInputs[definition.id] ?? "{}"} onInput={(event) => setTestInputs((current) => ({ ...current, [definition.id]: event.currentTarget.value }))} className={`${inputClass} mt-3 min-h-20 font-mono`} aria-label={`JSON input for ${definition.externalName}`} />
+      <div className="mt-2 flex gap-2">
+        <button type="button" disabled={!definition.enabled} onClick={() => void testDefinition(connection, definition)} className={buttonClass}>Test through gateway</button>
+        {manageable ? <button type="button" onClick={() => void toggleDefinition(definition)} className={buttonClass}>{definition.enabled ? "Disable" : "Enable"}</button> : null}
+      </div>
+      {testResults[definition.id] ? <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap rounded bg-black/20 p-2 text-xs">{testResults[definition.id]}</pre> : null}
+    </div>
+  );
   return (
     <div className="grid max-w-4xl gap-4">
       <section className="rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] p-4">
@@ -270,11 +330,11 @@ export function ToolsSettingsPage(props: {
         <section className="rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] p-4">
           <div className="flex items-center justify-between">
             <div>
-              <h2 className="text-sm font-medium">Connections</h2>
+              <h2 className="text-sm font-medium">Tools and connections</h2>
               <p className="mt-1 text-sm text-[var(--color-muted)]">
                 {organizationMode
-                  ? "Organization connections define the governed catalog."
-                  : "Personal credentials are write-only and encrypted server-side."}
+                  ? "Control built-in tools individually and manage organization connections."
+                  : "Use available organization tools and manage personal connections."}
               </p>
             </div>
             {canAddConnection ? (
@@ -296,8 +356,29 @@ export function ToolsSettingsPage(props: {
           ) : null}
 
           <div className="mt-4 grid gap-3">
-            {visibleConnections.length === 0 ? <p className="text-sm text-[var(--color-muted)]">No tool connections configured.</p> : null}
-            {visibleConnections.map((connection) => {
+            {builtInTools.map(({ connection, definition }) => {
+              const manageable = organizationMode && isAdmin;
+              return (
+                <article key={definition.id} className="rounded-md border border-[var(--color-border)] p-3">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <h3 className="text-sm font-medium">{definition.title || definition.externalName}</h3>
+                        <span className={`text-xs ${definition.enabled ? "text-emerald-400" : "text-[var(--color-muted)]"}`}>{definition.enabled ? "enabled" : "disabled"}</span>
+                      </div>
+                      <p className="mt-1 text-xs text-[var(--color-muted)]">Built-in · {definition.externalName}</p>
+                    </div>
+                    <div className="flex gap-2">
+                      <button type="button" onClick={() => setExpanded((current) => current === definition.id ? "" : definition.id)} className={buttonClass}>{expanded === definition.id ? "Hide" : "Details"}</button>
+                      {manageable ? <button type="button" onClick={() => void toggleDefinition(definition)} className={buttonClass}>{definition.enabled ? "Disable" : "Enable"}</button> : null}
+                    </div>
+                  </div>
+                  {expanded === definition.id ? definitionDetails(connection, definition, false) : null}
+                </article>
+              );
+            })}
+            {builtInTools.length === 0 && managedConnections.length === 0 ? <p className="text-sm text-[var(--color-muted)]">No tools or connections configured.</p> : null}
+            {managedConnections.map((connection) => {
               const manageable = organizationMode
                 ? connection.scope === "organization" && isAdmin
                 : connection.scope === "user";
@@ -321,10 +402,8 @@ export function ToolsSettingsPage(props: {
                     <div className="mt-3 grid gap-3 border-t border-[var(--color-border)] pt-3">
                       {(definitions[connection.id] ?? []).map((definition) => (
                         <div key={definition.id} className="rounded-md bg-[var(--color-panel)] p-3">
-                          <div className="flex justify-between gap-3"><div><h4 className="text-sm font-medium">{definition.title || definition.externalName}</h4><p className="mt-1 text-xs text-[var(--color-muted)]">{definition.externalName} · {definition.policy.decision}: {definition.policy.reasons.join(", ")}</p></div><code className="text-[0.625rem] text-[var(--color-muted)]">{definition.definitionDigest.slice(0, 12)}</code></div>
-                          <textarea value={testInputs[definition.id] ?? "{}"} onInput={(event) => setTestInputs((current) => ({ ...current, [definition.id]: event.currentTarget.value }))} className={`${inputClass} mt-3 min-h-20 font-mono`} aria-label={`JSON input for ${definition.externalName}`} />
-                          <button type="button" onClick={() => void testDefinition(connection, definition)} className={`${buttonClass} mt-2`}>Test through gateway</button>
-                          {testResults[definition.id] ? <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap rounded bg-black/20 p-2 text-xs">{testResults[definition.id]}</pre> : null}
+                          <div className="flex items-center justify-between gap-3"><h4 className="text-sm font-medium">{definition.title || definition.externalName}</h4><span className={`text-xs ${definition.enabled ? "text-emerald-400" : "text-[var(--color-muted)]"}`}>{definition.enabled ? "enabled" : "disabled"}</span></div>
+                          {definitionDetails(connection, definition, manageable)}
                         </div>
                       ))}
                       {(definitions[connection.id] ?? []).length === 0 ? <p className="text-sm text-[var(--color-muted)]">No definitions. Run discovery first.</p> : null}

@@ -602,6 +602,11 @@ export type UpdateToolConnectionRequest = {
   };
 };
 
+export type UpdateToolDefinitionRequest = {
+  definitionId: string;
+  enabled: boolean;
+};
+
 export type ToolGatewaySettings = {
   enabled: boolean;
   canManageOrganization: boolean;
@@ -1185,6 +1190,15 @@ export const apiRoutes = [
     "kind": "json"
   },
   {
+    "id": "updateToolDefinition",
+    "method": "POST",
+    "path": "/v1beta/tools/definitions/update",
+    "requestType": "UpdateToolDefinitionRequest",
+    "responseType": "ToolDefinition",
+    "auth": true,
+    "kind": "json"
+  },
+  {
     "id": "discoverToolCatalog",
     "method": "POST",
     "path": "/v1beta/tools/connections/:connectionId/discover",
@@ -1280,6 +1294,7 @@ const CREATE_TOOL_CONNECTION_ROUTE = apiRoutes.find((route) => route.id === "cre
 const UPDATE_TOOL_CONNECTION_ROUTE = apiRoutes.find((route) => route.id === "updateToolConnection")!;
 const DELETE_TOOL_CONNECTION_ROUTE = apiRoutes.find((route) => route.id === "deleteToolConnection")!;
 const LIST_TOOL_DEFINITIONS_ROUTE = apiRoutes.find((route) => route.id === "listToolDefinitions")!;
+const UPDATE_TOOL_DEFINITION_ROUTE = apiRoutes.find((route) => route.id === "updateToolDefinition")!;
 const DISCOVER_TOOL_CATALOG_ROUTE = apiRoutes.find((route) => route.id === "discoverToolCatalog")!;
 const ACKNOWLEDGE_TOOL_CATALOG_ROUTE = apiRoutes.find((route) => route.id === "acknowledgeToolCatalog")!;
 const INVOKE_TOOL_ROUTE = apiRoutes.find((route) => route.id === "invokeTool")!;
@@ -2547,6 +2562,27 @@ export async function listToolDefinitions(
   }
 
   return response.json() as Promise<ListToolDefinitionsResponse>;
+}
+
+export async function updateToolDefinition(
+  apiBaseUrl: string,
+  sessionToken: string | undefined, body: UpdateToolDefinitionRequest
+) {
+  const response = await fetch(apiUrl(apiBaseUrl, UPDATE_TOOL_DEFINITION_ROUTE.path), {
+    method: "POST",
+    credentials: "include",
+    headers: {
+      ...authorizationHeaders(sessionToken),
+      "content-type": "application/json"
+    },
+    body: JSON.stringify(body)
+  });
+
+  if (!response.ok) {
+    throw await apiError("updateToolDefinition", response);
+  }
+
+  return response.json() as Promise<ToolDefinition>;
 }
 
 export async function discoverToolCatalog(

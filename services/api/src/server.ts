@@ -108,6 +108,7 @@ import {
   listToolConnections,
   listToolDefinitions,
   updateToolConnection,
+  updateToolDefinition,
   updateToolGatewaySettings,
   ToolError,
   type ToolsPrincipal
@@ -1264,6 +1265,22 @@ app.get(routePath("listToolDefinitions"), async (c) => {
     return c.json({ definitions });
   } catch (error) {
     return handleToolError(c, error, "Unable to list tool definitions");
+  }
+});
+
+app.post(routePath("updateToolDefinition"), async (c) => {
+  const authorized = await authenticateAuthorized(c, "updateToolDefinition");
+  if ("response" in authorized) return authorized.response;
+  const principal = organizationPrincipal(authorized.auth.principal);
+  if (!principal) return organizationRequired(c);
+  const featureDisabled = await toolGatewayFeatureDisabled(c, principal.organizationId);
+  if (featureDisabled) return featureDisabled;
+
+  try {
+    const body = await c.req.json().catch(() => ({}));
+    return c.json(await updateToolDefinition(toolsPrincipal(principal), body));
+  } catch (error) {
+    return handleToolError(c, error, "Unable to update tool definition");
   }
 });
 

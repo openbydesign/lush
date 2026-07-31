@@ -13,6 +13,7 @@ import {
   listToolConnections,
   listToolDefinitions,
   updateToolConnection,
+  updateToolDefinition,
   updateToolGatewaySettings,
   requireVisibleConnection,
   type ToolsPrincipal
@@ -240,10 +241,12 @@ if (!databaseUrl) {
         (candidate) => candidate.systemManaged && candidate.source === "native"
       );
       if (!connection) throw new Error("Built-in tool connection was not provisioned");
-      if (enabled && !connection.enabled) {
-        return updateToolConnection(principal, {
-          connectionId: connection.id,
-          enabled: true
+      const [definition] = await listToolDefinitions(principal, connection.id);
+      if (!definition) throw new Error("Built-in tool definition was not provisioned");
+      if (definition.enabled !== enabled) {
+        await updateToolDefinition(principal, {
+          definitionId: definition.id,
+          enabled
         });
       }
       return connection;
@@ -256,10 +259,12 @@ if (!databaseUrl) {
         scope: "organization",
         source: "native",
         systemManaged: true,
-        enabled: false,
+        enabled: true,
         label: "Built-in tools"
       });
-      const connection = await builtinConnection(principal);
+      const [disabledDefinition] = await listToolDefinitions(principal, provisioned.id);
+      expect(disabledDefinition?.enabled).toBe(false);
+      const connection = await builtinConnection(principal, true);
       expect(connection.scope).toBe("organization");
 
       const definitions = await listToolDefinitions(principal, connection.id);
@@ -277,6 +282,9 @@ if (!databaseUrl) {
       await expect(deleteToolConnection(principal, connection.id)).rejects.toMatchObject({
         code: "system_connection_managed"
       });
+      await expect(
+        updateToolConnection(principal, { connectionId: connection.id, enabled: false })
+      ).rejects.toMatchObject({ code: "system_connection_managed" });
 
       const outcome = await invokeTool(principal, {
         connectionId: connection.id,
@@ -413,6 +421,15 @@ if (!databaseUrl) {
       await expect(
         acknowledgeConnectionCatalog(member, shared.id)
       ).rejects.toMatchObject({ code: "forbidden" });
+
+      const builtIn = await builtinConnection(admin, false);
+      const [builtInDefinition] = await listToolDefinitions(admin, builtIn.id);
+      await expect(
+        updateToolDefinition(member, {
+          definitionId: builtInDefinition!.id,
+          enabled: true
+        })
+      ).rejects.toMatchObject({ code: "forbidden" });
     });
 
     test("rejects secrets without a credential mode and plaintext endpoint headers", async () => {
@@ -449,7 +466,7 @@ if (!databaseUrl) {
       ).rejects.toMatchObject({ code: "invalid_connection" });
     });
 
-    test("disabled connections deny invocation", async () => {
+    test("disabled built-in tools deny invocation independently", async () => {
       const principal = await seedPrincipal("admin");
       const connection = await builtinConnection(principal, false);
 
@@ -458,7 +475,7 @@ if (!databaseUrl) {
         toolName: "current_time",
         input: {}
       });
-      expect(outcome).toMatchObject({ status: "denied", reason: "connection_disabled" });
+      expect(outcome).toMatchObject({ status: "denied", reason: "tool_disabled" });
     });
 
     test("MCP connection: discover, invoke over SSE, and enforce the approval binding", async () => {

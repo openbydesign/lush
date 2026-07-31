@@ -124,6 +124,11 @@ export type UpdateToolConnectionRequest = {
   };
 };
 
+export type UpdateToolDefinitionRequest = {
+  definitionId: string;
+  enabled: boolean;
+};
+
 export type ToolGatewaySettings = {
   enabled: boolean;
   canManageOrganization: boolean;
@@ -185,7 +190,7 @@ async function ensureBuiltinToolConnection(organizationId: string): Promise<void
       label: "Built-in tools",
       endpointConfig: {},
       credentialMode: "none",
-      enabled: false,
+      enabled: true,
       policy: {},
       catalogVersion: null,
       catalogAcknowledgedVersion: null,
@@ -207,6 +212,13 @@ async function ensureBuiltinToolConnection(organizationId: string): Promise<void
     .where("organizationId", "=", organizationId)
     .where("systemKey", "=", BUILTIN_CONNECTION_KEY)
     .executeTakeFirstOrThrow();
+  if (!connection.enabled) {
+    await db
+      .updateTable("toolConnections")
+      .set({ enabled: true, updatedAt: now })
+      .where("id", "=", connection.id)
+      .execute();
+  }
   const definitions: NormalizedToolDefinition[] = builtinNativeTools.map(
     ({ handler: _handler, ...definition }) => definition
   );
@@ -352,11 +364,13 @@ export async function updateToolConnection(
   const connection = await requireConnectionForManagement(principal, request.connectionId);
   if (
     connection.systemKey !== null &&
-    (request.label !== undefined || request.secret !== undefined)
+    (request.label !== undefined ||
+      request.secret !== undefined ||
+      request.enabled !== undefined)
   ) {
     throw new ToolError(
       "system_connection_managed",
-      "Built-in connection identity and credentials are managed by Lush",
+      "Built-in connection identity and availability are managed per tool",
       409
     );
   }
@@ -454,6 +468,37 @@ export async function listToolDefinitions(
   return rows.map((row) => summarizeDefinition(row, connection.policy));
 }
 
+export async function updateToolDefinition(
+  principal: ToolsPrincipal,
+  request: UpdateToolDefinitionRequest
+): Promise<ToolDefinitionSummary> {
+  if (!isUuid(request.definitionId) || typeof request.enabled !== "boolean") {
+    throw new ToolError(
+      "invalid_definition",
+      "A valid definitionId and enabled boolean are required"
+    );
+  }
+  const definition = await getDb()
+    .selectFrom("toolDefinitions")
+    .selectAll()
+    .where("id", "=", request.definitionId)
+    .executeTakeFirst();
+  if (!definition) {
+    throw new ToolError("definition_not_found", "Tool definition was not found", 404);
+  }
+  const connection = await requireConnectionForManagement(
+    principal,
+    definition.connectionId
+  );
+  const updated = await getDb()
+    .updateTable("toolDefinitions")
+    .set({ enabled: request.enabled, updatedAt: new Date() })
+    .where("id", "=", definition.id)
+    .returningAll()
+    .executeTakeFirstOrThrow();
+  return summarizeDefinition(updated, connection.policy);
+}
+
 /**
  * Discover the tools exposed by a connection and upsert them as definitions.
  * This uses the same authorization and connector path as runtime invocation, so
@@ -540,7 +585,10 @@ async function persistConnectionCatalog(
           annotations,
           sourceMetadata: tool.sourceMetadata ?? {},
           definitionDigest,
-          enabled: true,
+          // Code-owned tools are visible immediately but require an explicit
+          // per-tool enable decision. Remote discovery retains its current
+          // connection-level default for this Phase-2 surface.
+          enabled: connection.systemKey === null,
           createdAt: now,
           updatedAt: now
         })
