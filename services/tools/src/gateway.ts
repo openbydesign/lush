@@ -312,6 +312,9 @@ export async function decideToolApproval(
   approvalId: string,
   approve: boolean
 ): Promise<{ approvalId: string; status: "approved" | "denied" }> {
+  if (!isUuid(approvalId)) {
+    throw new ToolError("invalid_approval", "Approval id must be a UUID", 400);
+  }
   const db = getDb();
   const approval = await db
     .selectFrom("toolApprovals")
@@ -622,8 +625,8 @@ function outcomeFromPriorCall(prior: {
 }
 
 function validateInvocationRequest(request: InvokeToolRequest): void {
-  if (typeof request.connectionId !== "string" || request.connectionId.length === 0) {
-    throw new ToolError("invalid_invocation", "Connection id is required", 400);
+  if (!isUuid(request.connectionId)) {
+    throw new ToolError("invalid_invocation", "Connection id must be a UUID", 400);
   }
   if (
     typeof request.toolName !== "string" ||

@@ -396,6 +396,9 @@ export async function discoverConnectionCatalog(
 // ---------------------------------------------------------------------------
 
 export async function getConnectionRow(connectionId: string): Promise<ToolConnectionRow> {
+  if (!isUuid(connectionId)) {
+    throw new ToolError("connection_not_found", "Tool connection was not found", 404);
+  }
   const row = await getDb()
     .selectFrom("toolConnections")
     .selectAll()
@@ -622,4 +625,13 @@ function toIso(value: unknown): string {
     return value.toISOString();
   }
   return String(value);
+}
+
+function isUuid(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+      value
+    )
+  );
 }

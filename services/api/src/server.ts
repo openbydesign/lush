@@ -1274,12 +1274,23 @@ app.post(routePath("decideToolApproval"), async (c) => {
   if (featureDisabled) return featureDisabled;
 
   try {
-    const body = (await c.req.json().catch(() => ({}))) as { approve?: boolean };
+    const body = await c.req.json().catch(() => undefined);
+    if (
+      typeof body !== "object" ||
+      body === null ||
+      typeof (body as { approve?: unknown }).approve !== "boolean"
+    ) {
+      throw new ToolError(
+        "invalid_approval_decision",
+        "Approval decision must include an approve boolean",
+        400
+      );
+    }
     return c.json(
       await decideToolApproval(
         toolsPrincipal(principal),
         approvalIdParam(c),
-        body.approve === true
+        (body as { approve: boolean }).approve
       )
     );
   } catch (error) {

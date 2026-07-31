@@ -268,6 +268,17 @@ if (!databaseUrl) {
       ).rejects.toMatchObject({ code: "input_invalid" });
     });
 
+    test("malformed resource identifiers fail as client errors", async () => {
+      const principal = await seedPrincipal("admin");
+      await expect(requireVisibleConnection(principal, "not-a-uuid")).rejects.toMatchObject({
+        code: "connection_not_found",
+        status: 404
+      });
+      await expect(
+        decideToolApproval(principal, "not-a-uuid", true)
+      ).rejects.toMatchObject({ code: "invalid_approval", status: 400 });
+    });
+
     test("a user-private connection is invisible to other members and admins", async () => {
       const owner = await seedPrincipal("user");
       const otherUser = await seedMember(owner.organizationId, "user");
