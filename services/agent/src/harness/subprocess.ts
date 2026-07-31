@@ -149,7 +149,10 @@ class SubprocessHarness implements Harness {
     signal: AbortSignal
   ): AsyncIterable<HarnessResponse> {
     const child = spawn(this.options.command, this.options.args, {
-      stdio: ["pipe", "pipe", "pipe"],
+      // Harness protocol traffic is stdout-only. Route stderr to the null
+      // device so an untrusted/noisy child cannot fill an unread pipe and
+      // deadlock before emitting its terminal frame.
+      stdio: ["pipe", "pipe", "ignore"],
       env: this.options.env,
       cwd: this.options.cwd
     });

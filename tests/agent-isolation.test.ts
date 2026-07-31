@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { fileURLToPath } from "node:url";
 import {
   InFlightRegistry,
   InMemoryEventLog,
@@ -10,6 +11,9 @@ import {
 } from "../services/agent/src/harness";
 
 const signal = () => new AbortController().signal;
+const NOISY_HARNESS_HOST = fileURLToPath(
+  new URL("./fixtures/noisy-harness-host.ts", import.meta.url)
+);
 
 async function collect(gen: AsyncGenerator<ExecResponse>): Promise<ExecResponse[]> {
   const frames: ExecResponse[] = [];
@@ -122,6 +126,35 @@ describe("SubprocessIsolationProvider", () => {
       )
     ).rejects.toThrow();
     expect((await log.events("conv-timeout")).at(-1)!.state).toBe("failed");
+  }, 20_000);
+
+  test("does not deadlock when a harness floods stderr", async () => {
+    const noisyProvider = new SubprocessIsolationProvider({
+      hostScriptPath: NOISY_HARNESS_HOST,
+      limits: { wallClockMs: 2_000 }
+    });
+    const environment = await noisyProvider.provision(
+      baseSpec({ harnessId: "noisy", sessionId: "conv-noisy" })
+    );
+    const log = new InMemoryEventLog();
+
+    try {
+      await collect(
+        runExec({
+          request: {
+            conversationId: "conv-noisy",
+            inputs: [textMessage("user", "exercise stderr")]
+          },
+          log,
+          harness: environment.harness(),
+          inFlight: new InFlightRegistry(),
+          signal: signal()
+        })
+      );
+      expect((await log.events("conv-noisy")).at(-1)!.state).toBe("completed");
+    } finally {
+      await environment.destroy();
+    }
   }, 20_000);
 });
 
