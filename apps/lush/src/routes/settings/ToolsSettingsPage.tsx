@@ -13,7 +13,6 @@ import {
   updateToolGatewaySettings,
   type InvokeToolResponse,
   type ToolConnection,
-  type ToolConnectionScope,
   type ToolDefinition,
   type ToolGatewaySettings,
   type ToolSource,
@@ -31,6 +30,7 @@ type PendingApproval = {
 export function ToolsSettingsPage(props: {
   apiBaseUrl: string;
   currentRole?: UserRole;
+  mode: "organization" | "personal";
   runApiRequest: <T>(operation: (sessionToken: string) => Promise<T>) => Promise<T>;
 }) {
   const [settings, setSettings] = useState<ToolGatewaySettings>();
@@ -40,7 +40,6 @@ export function ToolsSettingsPage(props: {
   const [error, setError] = useState("");
   const [pending, setPending] = useState("");
   const [formOpen, setFormOpen] = useState(false);
-  const [scope, setScope] = useState<ToolConnectionScope>("user");
   const [source, setSource] = useState<ToolSource>("mcp");
   const [label, setLabel] = useState("");
   const [endpoint, setEndpoint] = useState("");
@@ -97,6 +96,7 @@ export function ToolsSettingsPage(props: {
   const submitConnection = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     void run("create", async () => {
+      const scope = props.mode === "organization" ? "organization" : "user";
       await request((token) =>
         createToolConnection(props.apiBaseUrl, token, {
           scope,
@@ -224,27 +224,41 @@ export function ToolsSettingsPage(props: {
   };
 
   const isAdmin = props.currentRole === "admin";
+  const organizationMode = props.mode === "organization";
+  const visibleConnections = organizationMode
+    ? connections.filter((connection) => connection.scope === "organization")
+    : connections;
+  const canAddConnection = !organizationMode || isAdmin;
   return (
     <div className="grid max-w-4xl gap-4">
       <section className="rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] p-4">
         <div className="flex items-start justify-between gap-4">
           <div>
-            <h2 className="text-sm font-medium text-[var(--color-text)]">Tool gateway</h2>
+            <h2 className="text-sm font-medium text-[var(--color-text)]">
+              {organizationMode ? "Tool gateway" : "My tools"}
+            </h2>
             <p className="mt-1 text-sm text-[var(--color-muted)]">
-              Manage personal and organization connections. Test calls use the production gateway, policy, and audit path.
+              {organizationMode
+                ? "Configure the organization catalog, availability, and policy ceiling."
+                : "Manage personal connections and use organization tools made available to you."}
             </p>
           </div>
-          <button
-            type="button"
-            disabled={!isAdmin || pending === "gateway" || !settings}
-            onClick={() => void toggleGateway()}
-            className="rounded-md border border-[var(--color-border)] px-3 py-2 text-sm disabled:opacity-50"
-          >
-            {settings?.enabled ? "Disable" : "Enable"}
-          </button>
+          {organizationMode ? (
+            <button
+              type="button"
+              disabled={!isAdmin || pending === "gateway" || !settings}
+              onClick={() => void toggleGateway()}
+              className="rounded-md border border-[var(--color-border)] px-3 py-2 text-sm disabled:opacity-50"
+            >
+              {settings?.enabled ? "Disable" : "Enable"}
+            </button>
+          ) : null}
         </div>
-        {!isAdmin ? (
+        {organizationMode && !isAdmin ? (
           <p className="mt-3 text-xs text-[var(--color-muted)]">Only an organization administrator can change the rollout state.</p>
+        ) : null}
+        {!organizationMode && settings && !settings.enabled ? (
+          <p className="mt-3 text-xs text-[var(--color-muted)]">The tool gateway is disabled for this organization.</p>
         ) : null}
       </section>
 
@@ -257,17 +271,23 @@ export function ToolsSettingsPage(props: {
           <div className="flex items-center justify-between">
             <div>
               <h2 className="text-sm font-medium">Connections</h2>
-              <p className="mt-1 text-sm text-[var(--color-muted)]">Credentials are write-only and encrypted server-side.</p>
+              <p className="mt-1 text-sm text-[var(--color-muted)]">
+                {organizationMode
+                  ? "Organization connections define the governed catalog."
+                  : "Personal credentials are write-only and encrypted server-side."}
+              </p>
             </div>
-            <button type="button" onClick={() => setFormOpen((value) => !value)} className="rounded-md bg-[var(--color-brand)] px-3 py-2 text-sm font-medium text-white">
-              Add connection
-            </button>
+            {canAddConnection ? (
+              <button type="button" onClick={() => setFormOpen((value) => !value)} className="rounded-md bg-[var(--color-brand)] px-3 py-2 text-sm font-medium text-white">
+                Add connection
+              </button>
+            ) : null}
           </div>
 
-          {formOpen ? (
+          {formOpen && canAddConnection ? (
             <form onSubmit={submitConnection} className="mt-4 grid gap-3 rounded-md border border-[var(--color-border)] bg-[var(--color-panel)] p-3 sm:grid-cols-2">
               <Field label="Name"><input required value={label} onInput={(event) => setLabel(event.currentTarget.value)} className={inputClass} /></Field>
-              <Field label="Scope"><select value={scope} onChange={(event) => setScope(event.currentTarget.value as ToolConnectionScope)} className={inputClass}><option value="user">Personal</option>{isAdmin ? <option value="organization">Organization</option> : null}</select></Field>
+              <Field label="Scope"><div className={`${inputClass} text-[var(--color-muted)]`}>{organizationMode ? "Organization" : "Personal"}</div></Field>
               <Field label="Source"><select value={source} onChange={(event) => setSource(event.currentTarget.value as ToolSource)} className={inputClass}><option value="mcp">MCP Streamable HTTP</option><option value="openapi">OpenAPI 3 JSON</option><option value="native">Native</option></select></Field>
               {source !== "native" ? <Field label={source === "openapi" ? "OpenAPI document URL" : "MCP endpoint URL"}><input required type="url" value={endpoint} onInput={(event) => setEndpoint(event.currentTarget.value)} className={inputClass} /></Field> : <div />}
               {source !== "native" ? <Field label="Credential (optional)"><input type="password" value={secret} onInput={(event) => setSecret(event.currentTarget.value)} className={inputClass} autoComplete="off" /></Field> : null}
@@ -276,9 +296,11 @@ export function ToolsSettingsPage(props: {
           ) : null}
 
           <div className="mt-4 grid gap-3">
-            {connections.length === 0 ? <p className="text-sm text-[var(--color-muted)]">No tool connections configured.</p> : null}
-            {connections.map((connection) => {
-              const manageable = connection.scope === "user" || isAdmin;
+            {visibleConnections.length === 0 ? <p className="text-sm text-[var(--color-muted)]">No tool connections configured.</p> : null}
+            {visibleConnections.map((connection) => {
+              const manageable = organizationMode
+                ? connection.scope === "organization" && isAdmin
+                : connection.scope === "user";
               return (
                 <article key={connection.id} className="rounded-md border border-[var(--color-border)] p-3">
                   <div className="flex flex-wrap items-start justify-between gap-3">

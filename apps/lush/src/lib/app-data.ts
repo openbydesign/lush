@@ -166,6 +166,13 @@ export const settingsRoutes: Route[] = [
     body: ""
   },
   {
+    href: "/settings/my-tools",
+    label: "My tools",
+    eyebrow: "Settings",
+    title: "My tools",
+    body: ""
+  },
+  {
     href: "/settings/organization",
     label: "Organization",
     eyebrow: "Organization settings",
@@ -180,10 +187,10 @@ export const settingsRoutes: Route[] = [
     body: ""
   },
   {
-    href: "/settings/tools",
-    label: "Tools",
+    href: "/settings/tool-gateway",
+    label: "Tool gateway",
     eyebrow: "Organization settings",
-    title: "Tools",
+    title: "Tool gateway",
     body: ""
   }
 ];

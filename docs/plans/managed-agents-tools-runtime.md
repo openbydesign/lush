@@ -1266,7 +1266,8 @@ credential key separation and rotation in
    both native and MCP sources.
 3. Implement gateway invocation, input/output bounds, live authorization,
    approval records, idempotency, audit, and telemetry.
-4. Expose settings APIs and minimal organization/personal connection UI.
+4. Expose settings APIs and split the minimal UI into organization **Tool
+   gateway** governance and personal **My tools** access/preferences.
 
 Gate: users cannot see or invoke each other's private connections; organization
 role/policy tests pass; SSRF, redirect, secret-redaction, timeout, catalog-change,

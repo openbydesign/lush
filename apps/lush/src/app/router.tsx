@@ -99,9 +99,11 @@ const router = createBrowserRouter([
                   { path: "settings/personal", element: <Navigate to="/settings/profile" replace /> },
                   { path: "settings/profile", element: <PersonalSettingsRoute pane="profile" /> },
                   { path: "settings/appearance", element: <PersonalSettingsRoute pane="appearance" /> },
+                  { path: "settings/my-tools", element: <ToolsSettingsRoute mode="personal" /> },
                   { path: "settings/organization", element: <OrganizationSettingsRoute /> },
                   { path: "settings/inference", element: <InferenceSettingsRoute /> },
-                  { path: "settings/tools", element: <ToolsSettingsRoute /> },
+                  { path: "settings/tool-gateway", element: <ToolsSettingsRoute mode="organization" /> },
+                  { path: "settings/tools", element: <Navigate to="/settings/tool-gateway" replace /> },
                   ...routes.flatMap((route) => {
                     const element = route.href === "/chat"
                       ? <ChatRoute />
@@ -270,13 +272,14 @@ function InferenceSettingsRoute() {
   );
 }
 
-function ToolsSettingsRoute() {
+function ToolsSettingsRoute({ mode }: { mode: "organization" | "personal" }) {
   const app = useApp();
   return (
     <ToolsSettingsPage
       apiBaseUrl={app.apiBaseUrl}
       currentRole={app.membershipRole}
       runApiRequest={app.runApiRequest}
+      mode={mode}
     />
   );
 }
