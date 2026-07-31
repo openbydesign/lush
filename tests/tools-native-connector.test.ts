@@ -6,12 +6,20 @@ const signal = () => new AbortController().signal;
 
 describe("NativeConnector", () => {
   test("discovers the built-in read-only tool without leaking the handler", async () => {
-    const tools = await new NativeConnector().discover();
+    const tools = await new NativeConnector().discover(new AbortController().signal);
     const currentTime = tools.find((tool) => tool.externalName === "current_time");
     expect(currentTime).toBeDefined();
     expect(currentTime?.annotations.readOnly).toBe(true);
     expect(currentTime?.annotations.destructive).toBe(false);
     expect((currentTime as Record<string, unknown>).handler).toBeUndefined();
+  });
+
+  test("rejects discovery when it is already canceled", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    await expect(new NativeConnector().discover(controller.signal)).rejects.toMatchObject({
+      name: "AbortError"
+    });
   });
 
   test("invokes current_time and returns a normalized JSON result", async () => {

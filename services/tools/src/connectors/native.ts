@@ -102,7 +102,8 @@ export class NativeConnector implements Connector {
     this.tools = new Map(tools.map((tool) => [tool.externalName, tool]));
   }
 
-  async discover(): Promise<NormalizedToolDefinition[]> {
+  async discover(signal: AbortSignal): Promise<NormalizedToolDefinition[]> {
+    signal.throwIfAborted();
     return [...this.tools.values()].map(({ handler: _handler, ...definition }) => definition);
   }
 
