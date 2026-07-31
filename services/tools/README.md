@@ -11,7 +11,8 @@ receive scoped capabilities rather than raw URLs or credentials.
 ### Connector plane (`src/connectors/`)
 
 - `native.ts` — trusted, in-process Lush tools with explicit schemas and policy
-  annotations. Ships one read-only tool (`current_time`).
+  annotations. The registry is currently empty; built-ins are added only when
+  they provide value beyond context already supplied to the agent.
 - `mcp/` — a stateful **MCP Streamable HTTP client** (spec revision 2025-11-25)
   implemented without an external SDK: JSON-RPC 2.0, `initialize` and version
   negotiation, `Mcp-Session-Id` handling, `notifications/initialized`, paginated

@@ -33,7 +33,8 @@ test("database migration ids match their ordinal prefix", () => {
     "015_tool_catalog_acknowledgment",
     "016_tool_gateway_rollout_convergence",
     "017_builtin_tool_connections",
-    "018_builtin_tool_enablement"
+    "018_builtin_tool_enablement",
+    "019_retire_current_time_tool"
   ]);
 });
 
@@ -102,6 +103,16 @@ test("built-in availability is governed per tool", async () => {
   expect(migration).toContain("set enabled = true");
   expect(migration).toContain("update tool_definitions");
   expect(migration).toContain("set enabled = false");
+  expect(migration).toContain("system_key = 'lush_builtin'");
+});
+
+test("the placeholder clock tool is retired append-only", async () => {
+  const migration = await Bun.file(
+    "packages/db/src/migrations/019_retire_current_time_tool.ts"
+  ).text();
+
+  expect(migration).toContain("delete from tool_definitions");
+  expect(migration).toContain("external_name = 'current_time'");
   expect(migration).toContain("system_key = 'lush_builtin'");
 });
 

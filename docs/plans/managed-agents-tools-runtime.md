@@ -1263,9 +1263,10 @@ credential key separation and rotation in
    review until a manager acknowledges the exact version, and policy explanations.
 2. Materialize code-owned native tools automatically as individually governed,
    top-level organization tools that are disabled by default; native is not a
-   user-creatable connection source. Implement one native read-only tool and one remote MCP
-   Streamable HTTP connection. Add OpenAPI import after the normalized contract
-   is exercised by both native and MCP sources.
+   user-creatable connection source. Keep the native registry empty until a
+   built-in adds value beyond run context, and implement a remote MCP Streamable
+   HTTP connection. Add OpenAPI import after the normalized contract is exercised
+   by the common definition and gateway paths.
 3. Implement gateway invocation, input/output bounds, live authorization,
    approval records, idempotency, audit, and telemetry.
 4. Expose settings APIs and split the minimal UI into organization **Tool
@@ -1382,7 +1383,7 @@ The first externally useful slice should be deliberately narrow:
 
 - system-managed Lush agent resolved from the database;
 - one user-scoped and one organization-scoped connection path;
-- one native read-only tool plus one remote MCP tool;
+- one read-only and one approval-required remote MCP tool;
 - a durable Lush run in the sandbox;
 - one hosted Code session using a session-bound environment and an existing
   normalized harness adapter;

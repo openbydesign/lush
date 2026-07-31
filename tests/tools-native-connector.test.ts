@@ -1,55 +1,62 @@
 import { describe, expect, test } from "bun:test";
-import { NativeConnector } from "../services/tools/src/connectors/native";
+import {
+  NativeConnector,
+  jsonResult,
+  type NativeTool
+} from "../services/tools/src/connectors/native";
 import { defaultConnectorLimits } from "../services/tools/src/connectors/types";
 
 const signal = () => new AbortController().signal;
+const fixtureTool: NativeTool = {
+  externalName: "fixture_echo",
+  title: "Fixture echo",
+  description: "Test-only native tool",
+  inputSchema: { type: "object" },
+  annotations: {
+    readOnly: true,
+    destructive: false,
+    idempotent: true,
+    openWorld: false
+  },
+  async handler(input) {
+    return jsonResult(input);
+  }
+};
 
 describe("NativeConnector", () => {
-  test("discovers the built-in read-only tool without leaking the handler", async () => {
-    const tools = await new NativeConnector().discover(new AbortController().signal);
-    const currentTime = tools.find((tool) => tool.externalName === "current_time");
-    expect(currentTime).toBeDefined();
-    expect(currentTime?.annotations.readOnly).toBe(true);
-    expect(currentTime?.annotations.destructive).toBe(false);
-    expect((currentTime as Record<string, unknown>).handler).toBeUndefined();
+  test("ships no placeholder built-ins", async () => {
+    expect(await new NativeConnector().discover(signal())).toEqual([]);
+  });
+
+  test("discovers registered tools without leaking handlers", async () => {
+    const [tool] = await new NativeConnector([fixtureTool]).discover(signal());
+    expect(tool?.externalName).toBe("fixture_echo");
+    expect(tool?.annotations.readOnly).toBe(true);
+    expect((tool as Record<string, unknown>).handler).toBeUndefined();
   });
 
   test("rejects discovery when it is already canceled", async () => {
     const controller = new AbortController();
     controller.abort();
-    await expect(new NativeConnector().discover(controller.signal)).rejects.toMatchObject({
+    await expect(new NativeConnector([fixtureTool]).discover(controller.signal)).rejects.toMatchObject({
       name: "AbortError"
     });
   });
 
-  test("invokes current_time and returns a normalized JSON result", async () => {
-    const result = await new NativeConnector().invoke({
-      externalName: "current_time",
-      input: { timeZone: "UTC" },
+  test("invokes a registered native tool", async () => {
+    const result = await new NativeConnector([fixtureTool]).invoke({
+      externalName: "fixture_echo",
+      input: { value: "hello" },
       limits: defaultConnectorLimits,
       signal: signal()
     });
     expect(result.isError).toBe(false);
-    const data = result.structured as { iso: string; epochMs: number; timeZone: string };
-    expect(data.timeZone).toBe("UTC");
-    expect(typeof data.epochMs).toBe("number");
-    expect(() => new Date(data.iso)).not.toThrow();
-  });
-
-  test("rejects an unknown time zone", async () => {
-    await expect(
-      new NativeConnector().invoke({
-        externalName: "current_time",
-        input: { timeZone: "Mars/Olympus_Mons" },
-        limits: defaultConnectorLimits,
-        signal: signal()
-      })
-    ).rejects.toMatchObject({ code: "invalid_time_zone" });
+    expect(result.structured).toEqual({ value: "hello" });
   });
 
   test("rejects an unknown tool name", async () => {
     await expect(
-      new NativeConnector().invoke({
+      new NativeConnector([fixtureTool]).invoke({
         externalName: "not_a_tool",
         input: {},
         limits: defaultConnectorLimits,

@@ -233,28 +233,36 @@ if (!databaseUrl) {
       return { userId: user.id, organizationId, role };
     }
 
-    async function builtinConnection(
-      principal: ToolsPrincipal,
-      enabled = true
-    ) {
+    async function builtInConnection(principal: ToolsPrincipal) {
       const connection = (await listToolConnections(principal)).find(
         (candidate) => candidate.systemManaged && candidate.source === "native"
       );
       if (!connection) throw new Error("Built-in tool connection was not provisioned");
-      const [definition] = await listToolDefinitions(principal, connection.id);
-      if (!definition) throw new Error("Built-in tool definition was not provisioned");
-      if (definition.enabled !== enabled) {
-        await updateToolDefinition(principal, {
-          definitionId: definition.id,
-          enabled
-        });
-      }
       return connection;
     }
 
-    test("built-in tools are provisioned disabled and synchronized automatically", async () => {
+    async function allowedMcpConnection(principal: ToolsPrincipal) {
+      const connection = await createToolConnection(principal, {
+        scope: "organization",
+        source: "mcp",
+        label: "Allowed mock MCP",
+        endpoint: { url: endpoint }
+      });
+      const definitions = await discoverConnectionCatalog(
+        principal,
+        connection.id,
+        new AbortController().signal
+      );
+      await updateToolConnection(principal, {
+        connectionId: connection.id,
+        policy: { approval: "never" }
+      });
+      return { connection, definitions };
+    }
+
+    test("the built-in catalog is provisioned without placeholder tools", async () => {
       const principal = await seedPrincipal("admin");
-      const provisioned = await builtinConnection(principal, false);
+      const provisioned = await builtInConnection(principal);
       expect(provisioned).toMatchObject({
         scope: "organization",
         source: "native",
@@ -262,13 +270,7 @@ if (!databaseUrl) {
         enabled: true,
         label: "Built-in tools"
       });
-      const [disabledDefinition] = await listToolDefinitions(principal, provisioned.id);
-      expect(disabledDefinition?.enabled).toBe(false);
-      const connection = await builtinConnection(principal, true);
-      expect(connection.scope).toBe("organization");
-
-      const definitions = await listToolDefinitions(principal, connection.id);
-      expect(definitions.map((d) => d.externalName)).toContain("current_time");
+      expect(await listToolDefinitions(principal, provisioned.id)).toEqual([]);
       await expect(
         createToolConnection(principal, {
           scope: "organization",
@@ -277,30 +279,14 @@ if (!databaseUrl) {
         })
       ).rejects.toMatchObject({ code: "invalid_connection" });
       await expect(
-        discoverConnectionCatalog(principal, connection.id, new AbortController().signal)
+        discoverConnectionCatalog(principal, provisioned.id, new AbortController().signal)
       ).rejects.toMatchObject({ code: "system_connection_managed" });
-      await expect(deleteToolConnection(principal, connection.id)).rejects.toMatchObject({
+      await expect(deleteToolConnection(principal, provisioned.id)).rejects.toMatchObject({
         code: "system_connection_managed"
       });
       await expect(
-        updateToolConnection(principal, { connectionId: connection.id, enabled: false })
+        updateToolConnection(principal, { connectionId: provisioned.id, enabled: false })
       ).rejects.toMatchObject({ code: "system_connection_managed" });
-
-      const outcome = await invokeTool(principal, {
-        connectionId: connection.id,
-        toolName: "current_time",
-        input: { timeZone: "UTC" }
-      });
-      expect(outcome.status).toBe("succeeded");
-      if (outcome.status === "succeeded") {
-        expect(outcome.result.isError).toBe(false);
-      }
-
-      // The call is persisted and attributable.
-      const calls = await getDb().selectFrom("toolCalls").selectAll().execute();
-      expect(calls).toHaveLength(1);
-      expect(calls[0]!.initiatedByUserId).toBe(principal.userId);
-      expect(calls[0]!.status).toBe("succeeded");
     });
 
     test("tool gateway rollout is disabled per organization by default", async () => {
@@ -332,12 +318,12 @@ if (!databaseUrl) {
 
     test("input validation rejects unexpected properties before invocation", async () => {
       const principal = await seedPrincipal("admin");
-      const connection = await builtinConnection(principal);
+      const { connection } = await allowedMcpConnection(principal);
 
       await expect(
         invokeTool(principal, {
           connectionId: connection.id,
-          toolName: "current_time",
+          toolName: "echo",
           input: { unexpected: true }
         })
       ).rejects.toMatchObject({ code: "input_invalid" });
@@ -422,11 +408,14 @@ if (!databaseUrl) {
         acknowledgeConnectionCatalog(member, shared.id)
       ).rejects.toMatchObject({ code: "forbidden" });
 
-      const builtIn = await builtinConnection(admin, false);
-      const [builtInDefinition] = await listToolDefinitions(admin, builtIn.id);
+      const [sharedDefinition] = await discoverConnectionCatalog(
+        admin,
+        shared.id,
+        new AbortController().signal
+      );
       await expect(
         updateToolDefinition(member, {
-          definitionId: builtInDefinition!.id,
+          definitionId: sharedDefinition!.id,
           enabled: true
         })
       ).rejects.toMatchObject({ code: "forbidden" });
@@ -466,13 +455,18 @@ if (!databaseUrl) {
       ).rejects.toMatchObject({ code: "invalid_connection" });
     });
 
-    test("disabled built-in tools deny invocation independently", async () => {
+    test("disabled tools deny invocation independently of their connection", async () => {
       const principal = await seedPrincipal("admin");
-      const connection = await builtinConnection(principal, false);
+      const { connection, definitions } = await allowedMcpConnection(principal);
+      const definition = definitions.find((candidate) => candidate.externalName === "echo")!;
+      await updateToolDefinition(principal, {
+        definitionId: definition.id,
+        enabled: false
+      });
 
       const outcome = await invokeTool(principal, {
         connectionId: connection.id,
-        toolName: "current_time",
+        toolName: "echo",
         input: {}
       });
       expect(outcome).toMatchObject({ status: "denied", reason: "tool_disabled" });
@@ -828,8 +822,8 @@ if (!databaseUrl) {
 
     test("expiring an approval closes its pending tool call", async () => {
       const principal = await seedPrincipal("admin");
-      const connection = await builtinConnection(principal);
-      const [definition] = await listToolDefinitions(principal, connection.id);
+      const { connection, definitions } = await allowedMcpConnection(principal);
+      const [definition] = definitions;
       const db = getDb();
       const past = new Date(Date.now() - 60_000);
 
@@ -925,8 +919,8 @@ if (!databaseUrl) {
 
     test("idempotency replays a failed call and rejects an in-flight one", async () => {
       const principal = await seedPrincipal("admin");
-      const connection = await builtinConnection(principal);
-      const [definition] = await listToolDefinitions(principal, connection.id);
+      const { connection, definitions } = await allowedMcpConnection(principal);
+      const definition = definitions.find((candidate) => candidate.externalName === "echo")!;
       const now = new Date();
       const emptyInputDigest = await sha256Hex(canonicalJson({}));
 
@@ -955,7 +949,7 @@ if (!databaseUrl) {
 
       const replayFailed = await invokeTool(principal, {
         connectionId: connection.id,
-        toolName: "current_time",
+        toolName: "echo",
         input: {},
         idempotencyKey: failedKey
       });
@@ -983,7 +977,7 @@ if (!databaseUrl) {
       await expect(
         invokeTool(principal, {
           connectionId: connection.id,
-          toolName: "current_time",
+          toolName: "echo",
           input: {},
           idempotencyKey: runningKey
         })
@@ -992,19 +986,19 @@ if (!databaseUrl) {
 
     test("idempotency key returns the prior successful call", async () => {
       const principal = await seedPrincipal("admin");
-      const connection = await builtinConnection(principal);
+      const { connection } = await allowedMcpConnection(principal);
 
       const key = crypto.randomUUID();
       const one = await invokeTool(principal, {
         connectionId: connection.id,
-        toolName: "current_time",
-        input: { timeZone: "UTC" },
+        toolName: "echo",
+        input: { message: "hello" },
         idempotencyKey: key
       });
       const two = await invokeTool(principal, {
         connectionId: connection.id,
-        toolName: "current_time",
-        input: { timeZone: "UTC" },
+        toolName: "echo",
+        input: { message: "hello" },
         idempotencyKey: key
       });
       expect(one.status).toBe("succeeded");
@@ -1018,12 +1012,12 @@ if (!databaseUrl) {
 
     test("concurrent use of one idempotency key creates at most one call", async () => {
       const principal = await seedPrincipal("admin");
-      const connection = await builtinConnection(principal);
+      const { connection } = await allowedMcpConnection(principal);
       const key = crypto.randomUUID();
       const request = {
         connectionId: connection.id,
-        toolName: "current_time",
-        input: { timeZone: "UTC" },
+        toolName: "echo",
+        input: { message: "hello" },
         idempotencyKey: key
       };
       const results = await Promise.allSettled([
@@ -1043,19 +1037,19 @@ if (!databaseUrl) {
     test("idempotency is principal-scoped and rejects operation mismatches", async () => {
       const owner = await seedPrincipal("admin");
       const member = await seedMember(owner.organizationId, "user");
-      const connection = await builtinConnection(owner);
+      const { connection } = await allowedMcpConnection(owner);
 
       const sharedKey = crypto.randomUUID();
       const ownerCall = await invokeTool(owner, {
         connectionId: connection.id,
-        toolName: "current_time",
-        input: { timeZone: "UTC" },
+        toolName: "echo",
+        input: { message: "hello" },
         idempotencyKey: sharedKey
       });
       const memberCall = await invokeTool(member, {
         connectionId: connection.id,
-        toolName: "current_time",
-        input: { timeZone: "UTC" },
+        toolName: "echo",
+        input: { message: "hello" },
         idempotencyKey: sharedKey
       });
       expect(ownerCall.status).toBe("succeeded");
@@ -1067,8 +1061,8 @@ if (!databaseUrl) {
       await expect(
         invokeTool(owner, {
           connectionId: connection.id,
-          toolName: "current_time",
-          input: { timeZone: "America/Los_Angeles" },
+          toolName: "echo",
+          input: { message: "different" },
           idempotencyKey: sharedKey
         })
       ).rejects.toMatchObject({ code: "idempotency_mismatch" });
@@ -1272,7 +1266,14 @@ async function mcpMock(request: Request): Promise<Response> {
             {
               name: "echo",
               description: "echo",
-              inputSchema: { type: "object" },
+              inputSchema: {
+                type: "object",
+                properties: {
+                  message: { type: "string" },
+                  hello: { type: "string" }
+                },
+                additionalProperties: false
+              },
               annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
             },
             {

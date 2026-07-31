@@ -359,7 +359,7 @@ describe("orchestrator runExec", () => {
 
 describe("tool gateway bridge", () => {
   const call: ToolCallContent = {
-    type: "tool_call", id: "call-1", name: "current_time", arguments: { timeZone: "UTC" }
+    type: "tool_call", id: "call-1", name: "fixture_echo", arguments: { value: "hello" }
   };
 
   test("maps a gateway ToolResult into a correlated ToolResultContent", () => {
@@ -371,7 +371,7 @@ describe("tool gateway bridge", () => {
     expect(toolResultContentFromResult(call, result)).toEqual({
       type: "tool_result",
       callId: "call-1",
-      name: "current_time",
+      name: "fixture_echo",
       isError: false,
       response: { iso: "2026-07-29T00:00:00Z" },
       signature: undefined
@@ -405,7 +405,7 @@ describe("tool gateway bridge", () => {
         };
       }
     });
-    const runtime = toolCallingHarness({ id: "h", executor, toolName: "current_time" });
+    const runtime = toolCallingHarness({ id: "h", executor, toolName: "fixture_echo" });
     const log = new InMemoryEventLog();
     const frames = await collect(
       runExec({
@@ -424,7 +424,7 @@ describe("tool gateway bridge", () => {
       connectionId: "connection-1",
       expectedDefinitionDigest: "digest-1",
       runId: "run-1",
-      name: "current_time"
+      name: "fixture_echo"
     });
     expect(seen[0]!.idempotencyKey).toBe(`run-1:${seen[0]!.callId}`);
 
