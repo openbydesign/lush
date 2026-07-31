@@ -3,6 +3,8 @@
   "pages": [
     "overview",
     "session-orchestration",
+    "managed-agent-runtime",
+    "tool-gateway",
     "coding-harness-orchestration",
     "authentication",
     "authorization"

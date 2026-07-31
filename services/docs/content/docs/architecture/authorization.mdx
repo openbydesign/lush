@@ -29,9 +29,13 @@ requested action before invoking service runtime code.
 The current role model has two organization roles:
 
 - `admin`: can manage organization settings, members, invites, inference
-  providers, model defaults, and other organization-owned configuration.
+  providers, model defaults, the organization Tool gateway, shared tool
+  connections, built-in tool availability, and other organization-owned
+  configuration.
 - `user`: can read organization-scoped state needed to use the app and manage
-  their own owned sessions.
+  their own sessions and private tool connections. Service-level ownership
+  checks prevent users from changing organization connections or another
+  user's private connections.
 
 Role-to-action bindings are explicit in the Authn/z service. Tests verify that
 protected API routes have matching authorization actions and that read-only
@@ -42,3 +46,9 @@ roles cannot perform management actions.
 Authorization happens before service runtime logic runs. Domain services still
 enforce ownership and lifecycle rules for their own state, such as sessions
 only being visible to their owner and archived sessions rejecting writes.
+
+Tool authorization is re-evaluated immediately before invocation. An enabled
+tool or a human approval is not a grant by itself: the gateway still verifies
+the principal, organization, run, connection, exact definition digest, input,
+and current policy. Personal settings may narrow organization policy but may
+not widen it.
