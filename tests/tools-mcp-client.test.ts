@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { readSseEvents } from "../services/tools/src/connectors/mcp/sse";
 import { McpConnector } from "../services/tools/src/connectors/mcp/client";
+import { McpTransport } from "../services/tools/src/connectors/mcp/transport";
 import type { EgressPolicy } from "../services/tools/src/net/egress";
 import { defaultConnectorLimits } from "../services/tools/src/connectors/types";
 
@@ -318,5 +319,58 @@ describe("McpConnector", () => {
     await client.close();
     expect(state.terminated).toBe(true);
     expect(client.getServerInfo()).toEqual({ name: "mock-mcp", version: "1.2.3" });
+  });
+});
+
+describe("McpTransport session isolation", () => {
+  test("does not share server-issued session ids across transports", async () => {
+    const observedSessions = new Map<string, string | null>();
+    const isolationServer = Bun.serve({
+      port: 0,
+      hostname: "127.0.0.1",
+      async fetch(request) {
+        const client = request.headers.get("x-test-client") ?? "unknown";
+        const body = (await request.json()) as { id: unknown; method: string };
+        if (body.method === "initialize") {
+          return jsonResponse(
+            jsonRpcResult(body.id, { protocolVersion: PROTOCOL_VERSION }),
+            { "mcp-session-id": `session-${client}` }
+          );
+        }
+        observedSessions.set(client, request.headers.get("mcp-session-id"));
+        return jsonResponse(jsonRpcResult(body.id, {}));
+      }
+    });
+
+    const makeTransport = (client: string) =>
+      new McpTransport({
+        endpoint: `http://127.0.0.1:${isolationServer.port}/mcp`,
+        headers: { "x-test-client": client },
+        egressPolicy: localPolicy,
+        maxResponseBytes: 10_000
+      });
+    const first = makeTransport("first");
+    const second = makeTransport("second");
+    const signal = new AbortController().signal;
+
+    try {
+      await Promise.all([
+        first.request("initialize", {}, signal),
+        second.request("initialize", {}, signal)
+      ]);
+      await Promise.all([
+        first.request("ping", {}, signal),
+        second.request("ping", {}, signal)
+      ]);
+
+      expect(observedSessions).toEqual(
+        new Map([
+          ["first", "session-first"],
+          ["second", "session-second"]
+        ])
+      );
+    } finally {
+      isolationServer.stop(true);
+    }
   });
 });

@@ -204,6 +204,8 @@ function normalizeToolDefinition(tool: unknown): NormalizedToolDefinition | null
 /**
  * Map MCP annotation hints, defaulting missing hints to the restrictive class.
  * These are hints only; authoritative policy is assigned by the control plane.
+ * The fail-closed defaults are deliberate: absence of an untrusted server hint
+ * must never make a tool appear safer or bypass an approval boundary.
  */
 function normalizeAnnotations(value: unknown): ToolAnnotations {
   if (!isObject(value)) {

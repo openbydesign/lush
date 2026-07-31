@@ -67,10 +67,15 @@ export function classifyIp(ip: string): string | null {
 }
 
 function classifyIpv4(ip: string): string | null {
-  const octets = ip.split(".").map((part) => Number.parseInt(part, 10));
-  if (octets.length !== 4 || octets.some((n) => Number.isNaN(n) || n < 0 || n > 255)) {
+  const parts = ip.split(".");
+  if (
+    parts.length !== 4 ||
+    parts.some((part) => !/^(?:0|[1-9]\d{0,2})$/.test(part))
+  ) {
     return `invalid IPv4 address: ${ip}`;
   }
+  const octets = parts.map((part) => Number.parseInt(part, 10));
+  if (octets.some((n) => n > 255)) return `invalid IPv4 address: ${ip}`;
   const [a, b, c] = octets as [number, number, number, number];
 
   if (a === 0) return "unspecified address";
@@ -199,6 +204,23 @@ async function resolveSafeDestination(
       400
     );
   }
+
+  const host = url.hostname.replace(/^\[|\]$/g, "");
+  const originalHost = rawAuthorityHostname(rawUrl);
+  if (
+    isIP(host) === 4 &&
+    originalHost !== null &&
+    originalHost.toLowerCase() !== host.toLowerCase()
+  ) {
+    // WHATWG URL parsing accepts legacy octal, hexadecimal, integer, short,
+    // and trailing-dot IPv4 spellings. Reject rather than silently normalize
+    // them so policy classification and socket connection share one spelling.
+    throw new EgressError(
+      "ambiguous_ip_literal",
+      `IPv4 address must use canonical dotted-decimal notation: ${originalHost}`,
+      400
+    );
+  }
   if (url.protocol === "http:" && !policy.allowInsecureHttp) {
     throw new EgressError(
       "insecure_scheme",
@@ -207,12 +229,11 @@ async function resolveSafeDestination(
     );
   }
 
-  const host = url.hostname.replace(/^\[|\]$/g, "");
   // A literal IP in the URL is checked directly; otherwise resolve DNS and check
   // every returned address to defeat DNS rebinding to an internal target. When
   // the host is an IP literal the classification below covers it fully, so no
   // separate literal check is needed.
-  const addresses = isIpLiteral(host) ? [host] : await resolver(host);
+  const addresses = isIP(host) !== 0 ? [host] : await resolver(host);
 
   if (addresses.length === 0) {
     throw new EgressError("dns_failure", `Could not resolve host: ${host}`, 502);
@@ -232,8 +253,23 @@ async function resolveSafeDestination(
   return { url, address: addresses[0]! };
 }
 
-function isIpLiteral(host: string): boolean {
-  return /^\d+\.\d+\.\d+\.\d+$/.test(host) || host.includes(":");
+function rawAuthorityHostname(rawUrl: string): string | null {
+  const schemeEnd = rawUrl.indexOf("://");
+  if (schemeEnd < 0) return null;
+
+  const authorityStart = schemeEnd + 3;
+  const authorityEnd = rawUrl.slice(authorityStart).search(/[/?#]/);
+  const authority = rawUrl.slice(
+    authorityStart,
+    authorityEnd < 0 ? undefined : authorityStart + authorityEnd
+  );
+  const hostPort = authority.slice(authority.lastIndexOf("@") + 1);
+  if (hostPort.startsWith("[")) {
+    const closingBracket = hostPort.indexOf("]");
+    return closingBracket < 0 ? null : hostPort.slice(1, closingBracket);
+  }
+  const portSeparator = hostPort.lastIndexOf(":");
+  return portSeparator < 0 ? hostPort : hostPort.slice(0, portSeparator);
 }
 
 async function defaultResolver(host: string): Promise<string[]> {

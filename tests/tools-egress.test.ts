@@ -31,6 +31,11 @@ describe("classifyIp", () => {
     expect(classifyIp("172.32.0.1")).toBeNull();
   });
 
+  test("rejects non-canonical dotted-decimal IPv4", () => {
+    expect(classifyIp("0177.0.0.1")).toContain("invalid IPv4");
+    expect(classifyIp("001.002.003.004")).toContain("invalid IPv4");
+  });
+
   test("classifies IPv6 loopback, ULA, and link-local", () => {
     expect(classifyIp("::1")).toContain("loopback");
     expect(classifyIp("fc00::1")).toContain("unique-local");
@@ -97,6 +102,37 @@ describe("assertSafeUrl", () => {
     await expect(
       assertSafeUrl("https://127.0.0.1:8080/mcp", publicPolicy)
     ).rejects.toMatchObject({ code: "blocked_destination" });
+  });
+
+  test("rejects ambiguous legacy IPv4 spellings", async () => {
+    const ambiguous = [
+      "0177.0.0.1", // octal octet
+      "0x7f.0.0.1", // hexadecimal octet
+      "127.1", // short form
+      "2130706433", // single-integer form
+      "127.0.0.1.", // trailing dot
+      "001.002.003.004" // leading-zero octets
+    ];
+
+    for (const host of ambiguous) {
+      await expect(
+        assertSafeUrl(`https://${host}/mcp`, publicPolicy)
+      ).rejects.toMatchObject({ code: "ambiguous_ip_literal" });
+    }
+  });
+
+  test("retains a trailing dot on an ordinary DNS hostname", async () => {
+    let resolvedHost = "";
+    const url = await assertSafeUrl(
+      "https://example.com./mcp",
+      publicPolicy,
+      async (host) => {
+        resolvedHost = host;
+        return ["93.184.216.34"];
+      }
+    );
+    expect(url.hostname).toBe("example.com.");
+    expect(resolvedHost).toBe("example.com.");
   });
 
   test("accepts a public https URL", async () => {
