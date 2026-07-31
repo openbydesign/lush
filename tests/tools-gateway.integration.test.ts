@@ -7,16 +7,47 @@ import {
   createToolConnection,
   deleteToolConnection,
   discoverConnectionCatalog,
+  isToolGatewayEnabled,
   listToolConnections,
   updateToolConnection,
   requireVisibleConnection,
   type ToolsPrincipal
 } from "../services/tools/src/runtime";
 import {
-  invokeTool,
+  invokeTool as invokeToolGateway,
   decideToolApproval,
-  decideApproval
+  decideApproval,
+  type InvokeToolRequest
 } from "../services/tools/src/gateway";
+import { canonicalJson, sha256Hex } from "../services/tools/src/digest";
+import { validateInput } from "../services/tools/src/validate";
+
+async function invokeTool(
+  principal: ToolsPrincipal,
+  request: Omit<InvokeToolRequest, "expectedDefinitionDigest"> & {
+    expectedDefinitionDigest?: string;
+  }
+) {
+  let definitionDigest = request.expectedDefinitionDigest;
+  if (!definitionDigest) {
+    const definition = await getDb()
+      .selectFrom("toolDefinitions")
+      .select("definitionDigest")
+      .where("connectionId", "=", request.connectionId)
+      .where((eb) =>
+        eb.or([
+          eb("externalName", "=", request.toolName),
+          eb("qualifiedName", "=", request.toolName)
+        ])
+      )
+      .executeTakeFirst();
+    definitionDigest = definition?.definitionDigest ?? "missing";
+  }
+  return invokeToolGateway(principal, {
+    ...request,
+    expectedDefinitionDigest: definitionDigest
+  });
+}
 
 const databaseUrl = integrationDatabaseUrl();
 
@@ -31,6 +62,14 @@ describe("decideApproval policy", () => {
   test("destructive tools require approval by default", () => {
     expect(decideApproval(rw, {})).toBe("approve");
   });
+  test("open-world tools require approval even when a source claims read-only", () => {
+    expect(
+      decideApproval(
+        { readOnly: true, destructive: false, idempotent: true, openWorld: true },
+        {}
+      )
+    ).toBe("approve");
+  });
   test("policy 'never' overrides to allow; 'every_call' overrides to approve", () => {
     expect(decideApproval(rw, { approval: "never" })).toBe("allow");
     expect(decideApproval(ro, { approval: "every_call" })).toBe("approve");
@@ -38,6 +77,12 @@ describe("decideApproval policy", () => {
   test("policy deny always denies", () => {
     expect(decideApproval(ro, { deny: true })).toBe("deny");
   });
+});
+
+test("object enum validation is independent of key insertion order", () => {
+  expect(
+    validateInput({ enum: [{ a: 1, b: 2 }] }, { b: 2, a: 1 })
+  ).toEqual({ ok: true });
 });
 
 if (!databaseUrl) {
@@ -194,6 +239,17 @@ if (!databaseUrl) {
       expect(calls[0]!.status).toBe("succeeded");
     });
 
+    test("tool gateway rollout is disabled per organization by default", async () => {
+      const principal = await seedPrincipal("admin");
+      expect(await isToolGatewayEnabled(principal.organizationId)).toBe(false);
+      await getDb()
+        .updateTable("organizations")
+        .set({ toolGatewayEnabled: true })
+        .where("id", "=", principal.organizationId)
+        .execute();
+      expect(await isToolGatewayEnabled(principal.organizationId)).toBe(true);
+    });
+
     test("input validation rejects unexpected properties before invocation", async () => {
       const principal = await seedPrincipal("admin");
       const connection = await createToolConnection(principal, {
@@ -254,6 +310,13 @@ if (!databaseUrl) {
         })
       ).rejects.toMatchObject({ code: "forbidden" });
 
+      await expect(
+        createToolConnection(member, {
+          source: "native",
+          label: "Missing scope"
+        } as never)
+      ).rejects.toMatchObject({ code: "invalid_connection" });
+
       const shared = await createToolConnection(admin, {
         scope: "organization",
         source: "native",
@@ -262,6 +325,42 @@ if (!databaseUrl) {
       await expect(
         updateToolConnection(member, { connectionId: shared.id, enabled: false })
       ).rejects.toMatchObject({ code: "forbidden" });
+      await expect(
+        discoverConnectionCatalog(member, shared.id, new AbortController().signal)
+      ).rejects.toMatchObject({ code: "forbidden" });
+    });
+
+    test("rejects secrets without a credential mode and plaintext endpoint headers", async () => {
+      const principal = await seedPrincipal("admin");
+      await expect(
+        createToolConnection(principal, {
+          scope: "organization",
+          source: "mcp",
+          label: "Unused secret",
+          endpoint: { url: endpoint },
+          secret: "must-not-store"
+        })
+      ).rejects.toMatchObject({ code: "invalid_connection" });
+      await expect(
+        createToolConnection(principal, {
+          scope: "organization",
+          source: "mcp",
+          label: "Plaintext header",
+          endpoint: { url: endpoint, headers: { authorization: "Bearer plaintext" } }
+        })
+      ).rejects.toMatchObject({ code: "invalid_endpoint" });
+
+      const noCredential = await createToolConnection(principal, {
+        scope: "organization",
+        source: "native",
+        label: "No credentials"
+      });
+      await expect(
+        updateToolConnection(principal, {
+          connectionId: noCredential.id,
+          secret: "must-not-store"
+        })
+      ).rejects.toMatchObject({ code: "invalid_connection" });
     });
 
     test("disabled connections deny invocation", async () => {
@@ -297,8 +396,24 @@ if (!databaseUrl) {
         new AbortController().signal
       );
       expect(definitions.map((d) => d.externalName).sort()).toEqual(["add", "echo"]);
+      expect(definitions.find((definition) => definition.externalName === "echo")?.annotations)
+        .toEqual({
+          readOnly: false,
+          destructive: true,
+          idempotent: false,
+          openWorld: true
+        });
 
-      // echo is read-only per its hints -> runs without approval (over SSE).
+      // The remote server's read-only hint is untrusted, so echo remains in the
+      // restrictive approval class until Lush-owned review metadata exists.
+      const echoApproval = await invokeTool(principal, {
+        connectionId: connection.id,
+        toolName: "echo",
+        input: { hello: "world" }
+      });
+      expect(echoApproval.status).toBe("approval_required");
+      if (echoApproval.status !== "approval_required") return;
+      await decideToolApproval(principal, echoApproval.approval.approvalId, true);
       const echo = await invokeTool(principal, {
         connectionId: connection.id,
         toolName: "echo",
@@ -397,6 +512,104 @@ if (!databaseUrl) {
       expect(sameRun.status).toBe("succeeded");
     });
 
+    test("only the initiating principal may decide an approval", async () => {
+      const principal = await seedPrincipal("admin");
+      const other = await seedMember(principal.organizationId, "user");
+      const connection = await createToolConnection(principal, {
+        scope: "organization",
+        source: "mcp",
+        label: "Mock MCP",
+        endpoint: { url: endpoint }
+      });
+      await discoverConnectionCatalog(principal, connection.id, new AbortController().signal);
+      const pending = await invokeTool(principal, {
+        connectionId: connection.id,
+        toolName: "add",
+        input: { a: 1, b: 2 }
+      });
+      expect(pending.status).toBe("approval_required");
+      if (pending.status !== "approval_required") return;
+
+      await expect(
+        decideToolApproval(other, pending.approval.approvalId, true)
+      ).rejects.toMatchObject({ code: "approval_not_found" });
+    });
+
+    test("an approved call is consumed at most once under concurrent retry", async () => {
+      const principal = await seedPrincipal("admin");
+      const connection = await createToolConnection(principal, {
+        scope: "organization",
+        source: "mcp",
+        label: "Mock MCP",
+        endpoint: { url: endpoint }
+      });
+      await discoverConnectionCatalog(principal, connection.id, new AbortController().signal);
+      const request = {
+        connectionId: connection.id,
+        toolName: "add",
+        input: { a: 4, b: 5 }
+      };
+      const pending = await invokeTool(principal, request);
+      expect(pending.status).toBe("approval_required");
+      if (pending.status !== "approval_required") return;
+      await decideToolApproval(principal, pending.approval.approvalId, true);
+
+      let invocations = 0;
+      toolCallSink = () => {
+        invocations += 1;
+      };
+      try {
+        const results = await Promise.allSettled([
+          invokeTool(principal, request),
+          invokeTool(principal, request)
+        ]);
+        expect(results.some((result) => result.status === "fulfilled")).toBe(true);
+      } finally {
+        toolCallSink = undefined;
+      }
+      expect(invocations).toBe(1);
+    });
+
+    test("an idempotency key reserves and resumes one approval-bound call", async () => {
+      const principal = await seedPrincipal("admin");
+      const connection = await createToolConnection(principal, {
+        scope: "organization",
+        source: "mcp",
+        label: "Mock MCP",
+        endpoint: { url: endpoint }
+      });
+      await discoverConnectionCatalog(principal, connection.id, new AbortController().signal);
+      const key = crypto.randomUUID();
+      const request = {
+        connectionId: connection.id,
+        toolName: "add",
+        input: { a: 6, b: 7 },
+        idempotencyKey: key
+      };
+
+      const first = await invokeTool(principal, request);
+      const pendingReplay = await invokeTool(principal, request);
+      expect(first.status).toBe("approval_required");
+      expect(pendingReplay).toEqual(first);
+      if (first.status !== "approval_required") return;
+      await decideToolApproval(principal, first.approval.approvalId, true);
+
+      const executed = await invokeTool(principal, request);
+      const completedReplay = await invokeTool(principal, request);
+      expect(executed.status).toBe("succeeded");
+      expect(completedReplay.status).toBe("succeeded");
+      if (executed.status === "succeeded" && completedReplay.status === "succeeded") {
+        expect(completedReplay.toolCallId).toBe(executed.toolCallId);
+      }
+      expect(
+        await getDb()
+          .selectFrom("toolCalls")
+          .selectAll()
+          .where("idempotencyKey", "=", key)
+          .execute()
+      ).toHaveLength(1);
+    });
+
     test("expiring an approval closes its pending tool call", async () => {
       const principal = await seedPrincipal("admin");
       const connection = await createToolConnection(principal, {
@@ -422,6 +635,7 @@ if (!databaseUrl) {
           status: "waiting_for_approval",
           input: {},
           inputDigest: "d",
+          definitionDigest: definition!.definitionDigest,
           isError: false,
           createdAt: new Date()
         })
@@ -487,7 +701,18 @@ if (!databaseUrl) {
         input: {},
         expectedDefinitionDigest: echoDef.definitionDigest
       });
-      expect(current.status).toBe("succeeded");
+      expect(current.status).toBe("approval_required");
+
+      await expect(
+        invokeToolGateway(
+          principal,
+          {
+            connectionId: connection.id,
+            toolName: "echo",
+            input: {}
+          } as unknown as InvokeToolRequest
+        )
+      ).rejects.toMatchObject({ code: "definition_digest_required" });
     });
 
     test("idempotency replays a failed call and rejects an in-flight one", async () => {
@@ -503,6 +728,7 @@ if (!databaseUrl) {
         new AbortController().signal
       );
       const now = new Date();
+      const emptyInputDigest = await sha256Hex(canonicalJson({}));
 
       // A prior FAILED call with a key is replayed as failed, not re-executed
       // (which would hit the unique index and previously threw a raw DB error).
@@ -516,7 +742,8 @@ if (!databaseUrl) {
           initiatedByUserId: principal.userId,
           status: "failed",
           input: {},
-          inputDigest: "d",
+          inputDigest: emptyInputDigest,
+          definitionDigest: definition!.definitionDigest,
           isError: true,
           outputPreview: { isError: true, content: [{ type: "text", text: "boom" }] },
           idempotencyKey: failedKey,
@@ -545,7 +772,8 @@ if (!databaseUrl) {
           initiatedByUserId: principal.userId,
           status: "running",
           input: {},
-          inputDigest: "d",
+          inputDigest: emptyInputDigest,
+          definitionDigest: definition!.definitionDigest,
           isError: false,
           idempotencyKey: runningKey,
           createdAt: now
@@ -566,23 +794,22 @@ if (!databaseUrl) {
       const principal = await seedPrincipal("admin");
       const connection = await createToolConnection(principal, {
         scope: "organization",
-        source: "mcp",
-        label: "Mock MCP",
-        endpoint: { url: endpoint }
+        source: "native",
+        label: "Built-in"
       });
       await discoverConnectionCatalog(principal, connection.id, new AbortController().signal);
 
       const key = crypto.randomUUID();
       const one = await invokeTool(principal, {
         connectionId: connection.id,
-        toolName: "echo",
-        input: { n: 1 },
+        toolName: "current_time",
+        input: { timeZone: "UTC" },
         idempotencyKey: key
       });
       const two = await invokeTool(principal, {
         connectionId: connection.id,
-        toolName: "echo",
-        input: { n: 1 },
+        toolName: "current_time",
+        input: { timeZone: "UTC" },
         idempotencyKey: key
       });
       expect(one.status).toBe("succeeded");
@@ -592,6 +819,74 @@ if (!databaseUrl) {
       }
       const calls = await getDb().selectFrom("toolCalls").selectAll().execute();
       expect(calls).toHaveLength(1);
+    });
+
+    test("concurrent use of one idempotency key creates at most one call", async () => {
+      const principal = await seedPrincipal("admin");
+      const connection = await createToolConnection(principal, {
+        scope: "organization",
+        source: "native",
+        label: "Built-in"
+      });
+      await discoverConnectionCatalog(principal, connection.id, new AbortController().signal);
+      const key = crypto.randomUUID();
+      const request = {
+        connectionId: connection.id,
+        toolName: "current_time",
+        input: { timeZone: "UTC" },
+        idempotencyKey: key
+      };
+      const results = await Promise.allSettled([
+        invokeTool(principal, request),
+        invokeTool(principal, request)
+      ]);
+      expect(results.some((result) => result.status === "fulfilled")).toBe(true);
+      expect(
+        await getDb()
+          .selectFrom("toolCalls")
+          .selectAll()
+          .where("idempotencyKey", "=", key)
+          .execute()
+      ).toHaveLength(1);
+    });
+
+    test("idempotency is principal-scoped and rejects operation mismatches", async () => {
+      const owner = await seedPrincipal("admin");
+      const member = await seedMember(owner.organizationId, "user");
+      const connection = await createToolConnection(owner, {
+        scope: "organization",
+        source: "native",
+        label: "Built-in"
+      });
+      await discoverConnectionCatalog(owner, connection.id, new AbortController().signal);
+
+      const sharedKey = crypto.randomUUID();
+      const ownerCall = await invokeTool(owner, {
+        connectionId: connection.id,
+        toolName: "current_time",
+        input: { timeZone: "UTC" },
+        idempotencyKey: sharedKey
+      });
+      const memberCall = await invokeTool(member, {
+        connectionId: connection.id,
+        toolName: "current_time",
+        input: { timeZone: "UTC" },
+        idempotencyKey: sharedKey
+      });
+      expect(ownerCall.status).toBe("succeeded");
+      expect(memberCall.status).toBe("succeeded");
+      if (ownerCall.status === "succeeded" && memberCall.status === "succeeded") {
+        expect(memberCall.toolCallId).not.toBe(ownerCall.toolCallId);
+      }
+
+      await expect(
+        invokeTool(owner, {
+          connectionId: connection.id,
+          toolName: "current_time",
+          input: { timeZone: "America/Los_Angeles" },
+          idempotencyKey: sharedKey
+        })
+      ).rejects.toMatchObject({ code: "idempotency_mismatch" });
     });
 
     test("an organization credential is stored encrypted and sent to the MCP server", async () => {
@@ -660,6 +955,7 @@ function restoreEnv(name: string, value: string | undefined) {
 }
 
 let authHeaderSink: ((value: string) => void) | undefined;
+let toolCallSink: (() => void) | undefined;
 
 async function mcpMock(request: Request): Promise<Response> {
   const auth = request.headers.get("authorization");
@@ -711,6 +1007,7 @@ async function mcpMock(request: Request): Promise<Response> {
         })
       );
     case "tools/call": {
+      toolCallSink?.();
       const name = body.params?.name;
       const args = (body.params?.arguments ?? {}) as { a?: number; b?: number };
       if (name === "echo") {

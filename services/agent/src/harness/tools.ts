@@ -27,11 +27,27 @@ export interface ThirdPartyExecutor {
  * principal and calls `invokeTool`; that resolution is intentionally outside
  * this module.
  */
+export type GatewayToolBinding = {
+  connectionId: string;
+  definitionDigest: string;
+};
+
 export type GatewayInvoke = (params: {
+  connectionId: string;
+  expectedDefinitionDigest: string;
+  runId: string;
+  callId: string;
+  idempotencyKey: string;
   name: string;
   arguments: Record<string, unknown>;
   signal: AbortSignal;
 }) => Promise<ToolResult>;
+
+export type GatewayExecutorOptions = {
+  runId: string;
+  resolveBinding(name: string): Promise<GatewayToolBinding>;
+  invoke: GatewayInvoke;
+};
 
 /** Map a gateway `ToolResult` into an AX `ToolResultContent`, correlating ids. */
 export function toolResultContentFromResult(
@@ -50,11 +66,17 @@ export function toolResultContentFromResult(
 }
 
 /** Build a `ThirdPartyExecutor` that routes tool calls through the gateway. */
-export function createGatewayExecutor(invoke: GatewayInvoke): ThirdPartyExecutor {
+export function createGatewayExecutor(options: GatewayExecutorOptions): ThirdPartyExecutor {
   return {
     async execute(call, signal) {
       try {
-        const result = await invoke({
+        const binding = await options.resolveBinding(call.name);
+        const result = await options.invoke({
+          connectionId: binding.connectionId,
+          expectedDefinitionDigest: binding.definitionDigest,
+          runId: options.runId,
+          callId: call.id,
+          idempotencyKey: `${options.runId}:${call.id}`,
           name: call.name,
           arguments: call.arguments,
           signal

@@ -12,6 +12,13 @@ import type { Migration } from "./types";
 export const toolGateway: Migration = {
   id: "012_tool_gateway",
   async up(db) {
+    // Phase 2 remains dark by default. Operators enable the tool gateway for an
+    // organization only after its security and recovery gates have passed.
+    await sql`
+      alter table organizations
+      add column if not exists tool_gateway_enabled boolean not null default false
+    `.execute(db);
+
     await sql`
       create table if not exists tool_connections (
         id uuid primary key default gen_random_uuid(),
@@ -30,9 +37,8 @@ export const toolGateway: Migration = {
       )
     `.execute(db);
 
-    // Org-scoped connections have owner_user_id = null; user-scoped connections
-    // are private to one user within one organization. A partial unique index
-    // keeps org-scoped labels unique while allowing per-user labels to repeat.
+    // Supports organization/owner visibility and management lookups. Labels are
+    // display values, not stable identifiers, and are intentionally non-unique.
     await sql`
       create index if not exists tool_connections_org_idx
       on tool_connections(organization_id, owner_user_id)
@@ -98,6 +104,7 @@ export const toolGateway: Migration = {
                             'succeeded', 'failed', 'denied', 'cancelled')),
         input jsonb not null default '{}'::jsonb,
         input_digest text not null,
+        definition_digest text not null,
         output_preview jsonb,
         output_ref text,
         is_error boolean not null default false,
@@ -115,11 +122,12 @@ export const toolGateway: Migration = {
       on tool_calls(organization_id, created_at desc)
     `.execute(db);
 
-    // Idempotency: a side-effecting call replayed with the same key must not
-    // execute twice. Scoped to the connection to avoid cross-tool collisions.
+    // Idempotency keys are caller-owned. Scope them to the initiating principal
+    // so a shared organization connection cannot replay one user's result to
+    // another user. The gateway separately rejects reuse for another operation.
     await sql`
       create unique index if not exists tool_calls_idempotency_idx
-      on tool_calls(connection_id, idempotency_key)
+      on tool_calls(connection_id, initiated_by_user_id, idempotency_key)
       where idempotency_key is not null
     `.execute(db);
 

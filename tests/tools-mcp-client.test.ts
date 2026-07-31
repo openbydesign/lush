@@ -158,6 +158,19 @@ beforeAll(() => {
               error: { code: -32000, message: "kaboom" }
             });
           }
+          if (name === "huge") {
+            return jsonResponse(
+              jsonRpcResult(body.id, {
+                content: [{ type: "text", text: "x".repeat(10_000) }]
+              })
+            );
+          }
+          if (name === "huge_error") {
+            return new Response("x".repeat(10_000), {
+              status: 500,
+              headers: { "content-type": "text/plain" }
+            });
+          }
           return jsonResponse({
             jsonrpc: "2.0",
             id: body.id,
@@ -266,6 +279,37 @@ describe("McpConnector", () => {
         signal: new AbortController().signal
       })
     ).rejects.toMatchObject({ code: "mcp_rpc_error" });
+  });
+
+  test("bounds JSON and HTTP error response bodies before buffering", async () => {
+    const bounded = new McpConnector({
+      endpoint,
+      egressPolicy: localPolicy,
+      maxResponseBytes: 512
+    });
+    const limits = { ...defaultConnectorLimits, maxResponseBytes: 512 };
+    await expect(
+      bounded.invoke({
+        externalName: "huge",
+        input: {},
+        limits,
+        signal: new AbortController().signal
+      })
+    ).rejects.toMatchObject({ code: "response_too_large" });
+
+    const boundedError = new McpConnector({
+      endpoint,
+      egressPolicy: localPolicy,
+      maxResponseBytes: 512
+    });
+    await expect(
+      boundedError.invoke({
+        externalName: "huge_error",
+        input: {},
+        limits,
+        signal: new AbortController().signal
+      })
+    ).rejects.toMatchObject({ code: "response_too_large" });
   });
 
   test("close() terminates the session via DELETE", async () => {

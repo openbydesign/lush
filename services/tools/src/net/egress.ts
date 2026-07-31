@@ -7,16 +7,17 @@
  * re-validates every redirect hop. The IP classification is a pure function so
  * it is unit-testable without network access.
  *
- * This is a best-effort application-layer control, not the authoritative one.
- * Because `fetch` re-resolves DNS when it connects, a hostile server can rebind
- * between our `lookup()` check and the actual connection (a TOCTOU window we do
- * not close here — doing so requires pinning the connection to the validated IP,
- * which the runtime's fetch does not expose). The authoritative defense is the
- * network policy at the sandbox boundary (see the plan's isolation defaults);
- * this layer hardens the credential-resolving gateway host as defense in depth.
+ * DNS is resolved once per hop and the socket connects directly to a validated
+ * address while retaining the original Host/SNI identity. This makes the
+ * credential-resolving gateway path authoritative against DNS rebinding rather
+ * than relying on an unrelated sandbox network boundary.
  */
 
 import { lookup } from "node:dns/promises";
+import { request as httpRequest } from "node:http";
+import { request as httpsRequest } from "node:https";
+import { isIP } from "node:net";
+import { Readable } from "node:stream";
 import { optionalBooleanEnv } from "@lush/config/env";
 
 export type EgressPolicy = {
@@ -167,6 +168,16 @@ export async function assertSafeUrl(
   policy: EgressPolicy,
   resolver: (host: string) => Promise<string[]> = defaultResolver
 ): Promise<URL> {
+  return (await resolveSafeDestination(rawUrl, policy, resolver)).url;
+}
+
+type SafeDestination = { url: URL; address: string };
+
+async function resolveSafeDestination(
+  rawUrl: string,
+  policy: EgressPolicy,
+  resolver: (host: string) => Promise<string[]> = defaultResolver
+): Promise<SafeDestination> {
   let url: URL;
   try {
     url = new URL(rawUrl);
@@ -178,6 +189,13 @@ export async function assertSafeUrl(
     throw new EgressError(
       "unsupported_scheme",
       `Unsupported URL scheme: ${url.protocol}`,
+      400
+    );
+  }
+  if (url.username || url.password) {
+    throw new EgressError(
+      "embedded_credentials",
+      "Remote connector URLs must not contain credentials",
       400
     );
   }
@@ -211,7 +229,7 @@ export async function assertSafeUrl(
     }
   }
 
-  return url;
+  return { url, address: addresses[0]! };
 }
 
 function isIpLiteral(host: string): boolean {
@@ -237,10 +255,11 @@ export async function safeFetch(
   policy: EgressPolicy,
   resolver?: (host: string) => Promise<string[]>
 ): Promise<Response> {
-  let currentUrl = (await assertSafeUrl(rawUrl, policy, resolver)).toString();
+  let current = await resolveSafeDestination(rawUrl, policy, resolver);
+  let currentInit = { ...init };
 
   for (let redirect = 0; redirect <= policy.maxRedirects; redirect += 1) {
-    const response = await fetch(currentUrl, { ...init, redirect: "manual" });
+    const response = await pinnedRequest(current, currentInit);
 
     if (!isRedirect(response.status)) {
       return response;
@@ -250,14 +269,106 @@ export async function safeFetch(
     if (!location) {
       return response;
     }
-    const nextUrl = new URL(location, currentUrl).toString();
-    currentUrl = (await assertSafeUrl(nextUrl, policy, resolver)).toString();
+    const nextUrl = new URL(location, current.url);
+    if (nextUrl.origin !== current.url.origin) {
+      await response.body?.cancel().catch(() => {});
+      throw new EgressError(
+        "cross_origin_redirect",
+        "Remote connector redirects must remain on the configured origin",
+        403
+      );
+    }
+    await response.body?.cancel().catch(() => {});
+    current = await resolveSafeDestination(nextUrl.toString(), policy, resolver);
+
+    const method = (currentInit.method ?? "GET").toUpperCase();
+    if (response.status === 303 || ((response.status === 301 || response.status === 302) && method === "POST")) {
+      const headers = new Headers(currentInit.headers);
+      headers.delete("content-length");
+      headers.delete("content-type");
+      currentInit = { ...currentInit, method: "GET", body: undefined, headers };
+    }
   }
 
   throw new EgressError(
     "too_many_redirects",
     `Exceeded ${policy.maxRedirects} redirects`,
     502
+  );
+}
+
+async function pinnedRequest(
+  destination: SafeDestination,
+  init: RequestInit
+): Promise<Response> {
+  const { url, address } = destination;
+  const headers = new Headers(init.headers);
+  headers.set("host", url.host);
+  const body = requestBody(init.body);
+  const request = url.protocol === "https:" ? httpsRequest : httpRequest;
+
+  return new Promise<Response>((resolve, reject) => {
+    const req = request(
+      {
+        protocol: url.protocol,
+        hostname: address,
+        port: url.port || undefined,
+        path: `${url.pathname}${url.search}`,
+        method: init.method ?? "GET",
+        headers: Object.fromEntries(headers.entries()),
+        agent: false,
+        servername: url.protocol === "https:" && isIP(url.hostname) === 0
+          ? url.hostname
+          : undefined
+      },
+      (incoming) => {
+        const responseHeaders = new Headers();
+        for (const [name, value] of Object.entries(incoming.headers)) {
+          if (Array.isArray(value)) {
+            for (const item of value) responseHeaders.append(name, item);
+          } else if (value !== undefined) {
+            responseHeaders.set(name, value);
+          }
+        }
+        const status = incoming.statusCode ?? 502;
+        const bodyForbidden =
+          init.method?.toUpperCase() === "HEAD" || status === 204 || status === 304;
+        if (bodyForbidden) incoming.resume();
+        const responseBody = bodyForbidden
+          ? null
+          : (Readable.toWeb(incoming) as ReadableStream<Uint8Array>);
+        resolve(
+          new Response(responseBody, {
+            status,
+            statusText: incoming.statusMessage,
+            headers: responseHeaders
+          })
+        );
+      }
+    );
+
+    const abort = () => req.destroy(new DOMException("The operation was aborted", "AbortError"));
+    if (init.signal?.aborted) {
+      abort();
+    } else {
+      init.signal?.addEventListener("abort", abort, { once: true });
+    }
+    req.once("error", reject);
+    req.once("close", () => init.signal?.removeEventListener("abort", abort));
+    req.end(body);
+  });
+}
+
+function requestBody(body: BodyInit | null | undefined): string | Uint8Array | undefined {
+  if (body == null) return undefined;
+  if (typeof body === "string") return body;
+  if (body instanceof Uint8Array) return body;
+  if (body instanceof ArrayBuffer) return new Uint8Array(body);
+  if (body instanceof URLSearchParams) return body.toString();
+  throw new EgressError(
+    "unsupported_request_body",
+    "Remote connector request body must be buffered",
+    500
   );
 }
 

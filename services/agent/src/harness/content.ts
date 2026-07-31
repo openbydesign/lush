@@ -44,16 +44,14 @@ export type ToolResultContent = {
 };
 
 /**
- * Human-in-the-loop approval. AX `ConfirmationContent`: the harness emits a
- * question; the client replies with a message carrying the decision. Lush binds
- * the authoritative approval decision (input digest, expiry, principal) in the
- * control plane; this content type is only the transport for the interaction.
+ * Human-in-the-loop approval request. The harness may emit the question, but the
+ * decision is accepted only by the authenticated control plane and never enters
+ * model- or harness-authored content.
  */
 export type ConfirmationContent = {
   type: "confirmation";
   id: string;
   question?: string;
-  decision?: { approved: boolean };
 };
 
 export type MediaKind = "image" | "audio" | "document" | "video";

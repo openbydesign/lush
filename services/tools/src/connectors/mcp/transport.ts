@@ -66,7 +66,11 @@ export class McpTransport {
       );
     }
     if (!response.ok) {
-      const body = await safeReadText(response);
+      const body = await safeReadText(
+        response,
+        this.options.maxResponseBytes,
+        signal
+      );
       throw new ConnectorError(
         "mcp_http_error",
         `MCP request '${method}' failed with ${response.status}: ${body || response.statusText}`,
@@ -101,7 +105,11 @@ export class McpTransport {
     // Notifications should be answered with 202 Accepted, but some servers reply
     // 200 with an empty body. Anything else is an error.
     if (!response.ok) {
-      const body = await safeReadText(response);
+      const body = await safeReadText(
+        response,
+        this.options.maxResponseBytes,
+        signal
+      );
       throw new ConnectorError(
         "mcp_http_error",
         `MCP notification '${method}' failed with ${response.status}: ${body}`,
@@ -181,7 +189,9 @@ export class McpTransport {
     const contentType = response.headers.get("content-type") ?? "";
 
     if (contentType.includes("application/json")) {
-      const body = await response.json().catch(() => undefined);
+      const body = safeParseJson(
+        await readBoundedText(response, this.options.maxResponseBytes, signal)
+      );
       if (isJsonRpcResponse(body) && body.id === id) {
         return body;
       }
@@ -221,12 +231,61 @@ export class McpTransport {
   }
 }
 
-async function safeReadText(response: Response): Promise<string> {
+async function safeReadText(
+  response: Response,
+  maxBytes: number,
+  signal: AbortSignal
+): Promise<string> {
   try {
-    return (await response.text()).slice(0, 2000);
-  } catch {
+    return (await readBoundedText(response, maxBytes, signal)).slice(0, 2000);
+  } catch (error) {
+    if (error instanceof ConnectorError) throw error;
     return "";
   }
+}
+
+async function readBoundedText(
+  response: Response,
+  maxBytes: number,
+  signal: AbortSignal
+): Promise<string> {
+  const declaredLength = Number(response.headers.get("content-length"));
+  if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
+    await response.body?.cancel().catch(() => {});
+    throw responseTooLarge(maxBytes);
+  }
+  if (!response.body) return "";
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let total = 0;
+  let text = "";
+  try {
+    while (true) {
+      if (signal.aborted) {
+        throw new DOMException("The operation was aborted", "AbortError");
+      }
+      const { value, done } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel();
+        throw responseTooLarge(maxBytes);
+      }
+      text += decoder.decode(value, { stream: true });
+    }
+    return text + decoder.decode();
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+function responseTooLarge(maxBytes: number): ConnectorError {
+  return new ConnectorError(
+    "response_too_large",
+    `MCP response exceeded ${maxBytes} bytes`,
+    502
+  );
 }
 
 function safeParseJson(value: string): unknown {

@@ -41,6 +41,15 @@ export class HarnessProtocolError extends Error {
   }
 }
 
+/** The durable run must enter needs_acknowledgment before execution can resume. */
+export class AmbiguousToolOutcomeError extends Error {
+  readonly code = "ambiguous_tool_outcome";
+  constructor(readonly conversationId: string) {
+    super("Interrupted tool execution requires an authorized acknowledgment");
+    this.name = "AmbiguousToolOutcomeError";
+  }
+}
+
 export class HarnessExecutionError extends Error {
   readonly code = "harness_execution_failed";
   constructor(
@@ -83,6 +92,9 @@ export async function* runExec(
     const resume = resumptionState(prior);
 
     assertHarnessBinding(harness, resume.boundHarnessId, request.harnessId);
+    if (resume.needsAcknowledgment) {
+      throw new AmbiguousToolOutcomeError(conversationId);
+    }
     const execId = options.execId ?? crypto.randomUUID();
 
     // Catch a reconnecting client up on output frames it missed. Only replay

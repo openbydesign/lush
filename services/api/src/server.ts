@@ -88,6 +88,7 @@ import {
   createToolConnection,
   deleteToolConnection,
   discoverConnectionCatalog,
+  isToolGatewayEnabled,
   listToolConnections,
   listToolDefinitions,
   updateToolConnection,
@@ -354,6 +355,17 @@ function toolsPrincipal(principal: OrganizationPrincipal): ToolsPrincipal {
     organizationId: principal.organizationId,
     role: principal.role
   };
+}
+
+async function toolGatewayFeatureDisabled(c: Context, organizationId: string) {
+  if (await isToolGatewayEnabled(organizationId)) return null;
+  return c.json(
+    {
+      error: "feature_disabled",
+      message: "The tool gateway is not enabled for this organization"
+    },
+    403
+  );
 }
 
 app.post(routePath("registerAccount"), async (c) => {
@@ -1119,6 +1131,8 @@ app.get(routePath("listToolConnections"), async (c) => {
   if ("response" in authorized) return authorized.response;
   const principal = organizationPrincipal(authorized.auth.principal);
   if (!principal) return organizationRequired(c);
+  const featureDisabled = await toolGatewayFeatureDisabled(c, principal.organizationId);
+  if (featureDisabled) return featureDisabled;
 
   try {
     const connections = await listToolConnections(toolsPrincipal(principal));
@@ -1133,6 +1147,8 @@ app.post(routePath("createToolConnection"), async (c) => {
   if ("response" in authorized) return authorized.response;
   const principal = organizationPrincipal(authorized.auth.principal);
   if (!principal) return organizationRequired(c);
+  const featureDisabled = await toolGatewayFeatureDisabled(c, principal.organizationId);
+  if (featureDisabled) return featureDisabled;
 
   try {
     const body = await c.req.json().catch(() => ({}));
@@ -1147,6 +1163,8 @@ app.post(routePath("updateToolConnection"), async (c) => {
   if ("response" in authorized) return authorized.response;
   const principal = organizationPrincipal(authorized.auth.principal);
   if (!principal) return organizationRequired(c);
+  const featureDisabled = await toolGatewayFeatureDisabled(c, principal.organizationId);
+  if (featureDisabled) return featureDisabled;
 
   try {
     const body = await c.req.json().catch(() => ({}));
@@ -1161,6 +1179,8 @@ app.post(routePath("deleteToolConnection"), async (c) => {
   if ("response" in authorized) return authorized.response;
   const principal = organizationPrincipal(authorized.auth.principal);
   if (!principal) return organizationRequired(c);
+  const featureDisabled = await toolGatewayFeatureDisabled(c, principal.organizationId);
+  if (featureDisabled) return featureDisabled;
 
   try {
     const body = await c.req.json().catch(() => undefined);
@@ -1177,6 +1197,8 @@ app.get(routePath("listToolDefinitions"), async (c) => {
   if ("response" in authorized) return authorized.response;
   const principal = organizationPrincipal(authorized.auth.principal);
   if (!principal) return organizationRequired(c);
+  const featureDisabled = await toolGatewayFeatureDisabled(c, principal.organizationId);
+  if (featureDisabled) return featureDisabled;
 
   try {
     const definitions = await listToolDefinitions(
@@ -1194,6 +1216,8 @@ app.post(routePath("discoverToolCatalog"), async (c) => {
   if ("response" in authorized) return authorized.response;
   const principal = organizationPrincipal(authorized.auth.principal);
   if (!principal) return organizationRequired(c);
+  const featureDisabled = await toolGatewayFeatureDisabled(c, principal.organizationId);
+  if (featureDisabled) return featureDisabled;
 
   try {
     const definitions = await discoverConnectionCatalog(
@@ -1212,6 +1236,8 @@ app.post(routePath("invokeTool"), async (c) => {
   if ("response" in authorized) return authorized.response;
   const principal = organizationPrincipal(authorized.auth.principal);
   if (!principal) return organizationRequired(c);
+  const featureDisabled = await toolGatewayFeatureDisabled(c, principal.organizationId);
+  if (featureDisabled) return featureDisabled;
 
   try {
     const body = (await c.req.json().catch(() => ({}))) as {
@@ -1227,7 +1253,7 @@ app.post(routePath("invokeTool"), async (c) => {
         connectionId: connectionIdParam(c),
         toolName: body.toolName ?? "",
         input: body.input,
-        expectedDefinitionDigest: body.expectedDefinitionDigest,
+        expectedDefinitionDigest: body.expectedDefinitionDigest ?? "",
         idempotencyKey: body.idempotencyKey,
         runId: body.runId
       },
@@ -1244,6 +1270,8 @@ app.post(routePath("decideToolApproval"), async (c) => {
   if ("response" in authorized) return authorized.response;
   const principal = organizationPrincipal(authorized.auth.principal);
   if (!principal) return organizationRequired(c);
+  const featureDisabled = await toolGatewayFeatureDisabled(c, principal.organizationId);
+  if (featureDisabled) return featureDisabled;
 
   try {
     const body = (await c.req.json().catch(() => ({}))) as { approve?: boolean };

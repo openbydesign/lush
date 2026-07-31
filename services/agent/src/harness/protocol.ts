@@ -90,8 +90,10 @@ export type ResumptionState = {
   boundHarnessId: string | null;
   /** Highest assigned step; 0 when empty. */
   lastStep: number;
-  /** True when the last turn did not finish (`pending` tail) and must be re-run. */
+  /** True when an interrupted turn is safe to re-run automatically. */
   needsResume: boolean;
+  /** True when re-running could duplicate an externally visible side effect. */
+  needsAcknowledgment: boolean;
 };
 
 /**
@@ -101,7 +103,13 @@ export type ResumptionState = {
  */
 export function resumptionState(events: ConversationEvent[]): ResumptionState {
   if (events.length === 0) {
-    return { currentState: null, boundHarnessId: null, lastStep: 0, needsResume: false };
+    return {
+      currentState: null,
+      boundHarnessId: null,
+      lastStep: 0,
+      needsResume: false,
+      needsAcknowledgment: false
+    };
   }
   let boundHarnessId: string | null = null;
   let lastStep = 0;
@@ -114,11 +122,21 @@ export function resumptionState(events: ConversationEvent[]): ResumptionState {
     }
   }
   const currentState = events[events.length - 1]!.state;
+  const pendingExecId = currentState === "pending" ? events[events.length - 1]!.execId : null;
+  const needsAcknowledgment =
+    pendingExecId !== null &&
+    events.some(
+      (event) =>
+        event.execId === pendingExecId &&
+        event.kind === "output" &&
+        event.messages.some((message) => message.content.type === "tool_call")
+    );
   return {
     currentState,
     boundHarnessId,
     lastStep,
-    needsResume: currentState === "pending"
+    needsResume: currentState === "pending" && !needsAcknowledgment,
+    needsAcknowledgment
   };
 }
 

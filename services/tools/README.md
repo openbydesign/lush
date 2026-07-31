@@ -23,15 +23,16 @@ receive scoped capabilities rather than raw URLs or credentials.
   native and MCP sources.
 
 Every connector normalizes into a Lush-owned `ToolResult`. External tool
-descriptions and annotation hints are untrusted; missing side-effect hints
-default to the more restrictive class.
+descriptions and annotation hints are untrusted. Remote definitions receive the
+restrictive Lush-owned risk class until an explicit review surface exists.
 
 ### Control plane (`src/runtime.ts`)
 
 CRUD for organization- and user-scoped connections, encrypted credential
 storage (`src/secrets.ts`), and catalog discovery/normalization. Reads are
 scoped so a user never sees another user's private connection, and an
-administrator gets governance metadata but not another user's secret.
+administrator gets governance metadata but not another user's secret. Shared
+catalog refresh is a management operation and therefore administrator-only.
 
 ### Invocation plane (`src/gateway.ts`)
 
@@ -39,24 +40,29 @@ The single mediated call path: verifies principal + connection + definition
 digest, validates input (`src/validate.ts`), makes a policy/approval decision,
 resolves credentials server-side, invokes the connector under time/byte bounds,
 normalizes and bounds the result, and persists an attributable `tool_call` with
-audit. Callers may pin `expectedDefinitionDigest` (exposed on each
+audit. Callers must pass `expectedDefinitionDigest` (exposed on each
 `ToolDefinition`) so a catalog change since capability resolution fails closed.
-Idempotency keys replay the prior call's outcome (and reject an in-flight one)
-rather than re-executing. Approvals are bound to the exact normalized input
-digest and are single-use: the approved call row is reused on the follow-up
-invocation, and a later call with the same input requires a fresh approval.
+Idempotency keys are scoped to the initiating
+principal, bound to the exact run/tool/definition/input, and reserve
+approval-pending calls as well as running calls. Approvals are bound to the exact
+normalized input digest and are atomically single-use: the approved call row is
+reused on the follow-up invocation, and a later call with the same input requires
+a fresh approval.
 
 ### SSRF-safe egress (`src/net/egress.ts`)
 
 All remote connector traffic goes through an egress guard that enforces HTTPS,
 blocks private/loopback/link-local/metadata destinations (defeating DNS
-rebinding by checking resolved addresses), and re-validates every redirect hop.
+rebinding by connecting directly to the validated address with the original
+Host/SNI identity), rejects cross-origin redirects before forwarding credentials,
+and bounds JSON, SSE, and error bodies before buffering.
 
 ## Persistence
 
 Migration `012_tool_gateway` adds `tool_connections`,
 `tool_credential_bindings`, `tool_definitions`, `tool_calls`, and
-`tool_approvals`.
+`tool_approvals`. The HTTP surface is disabled by default through the
+organization-level `tool_gateway_enabled` rollout flag.
 
 ## Not yet implemented
 

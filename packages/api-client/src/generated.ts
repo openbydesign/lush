@@ -571,7 +571,7 @@ export type ToolApprovalDescriptor = {
 export type InvokeToolRequest = {
   toolName: string;
   input?: unknown;
-  expectedDefinitionDigest?: string;
+  expectedDefinitionDigest: string;
   idempotencyKey?: string;
   runId?: string;
 };

@@ -64,6 +64,7 @@ export type OrganizationsTable = {
   id: Generated<string>;
   name: string;
   slug: string;
+  toolGatewayEnabled: Generated<boolean>;
   createdAt: Timestamp;
   updatedAt: Timestamp;
 };
@@ -354,6 +355,7 @@ export type ToolCallsTable = {
   status: ToolCallStatus;
   input: unknown;
   inputDigest: string;
+  definitionDigest: string;
   outputPreview: unknown | null;
   outputRef: string | null;
   isError: boolean;

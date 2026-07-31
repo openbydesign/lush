@@ -7,6 +7,7 @@ export {
 } from "./event-log";
 export {
   runExec,
+  AmbiguousToolOutcomeError,
   HarnessResolutionError,
   HarnessProtocolError,
   HarnessExecutionError,
@@ -34,5 +35,7 @@ export {
   createGatewayExecutor,
   toolResultContentFromResult,
   type ThirdPartyExecutor,
-  type GatewayInvoke
+  type GatewayInvoke,
+  type GatewayExecutorOptions,
+  type GatewayToolBinding
 } from "./tools";

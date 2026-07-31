@@ -39,18 +39,16 @@ import { validateInput } from "./validate";
 const logger = createLogger("@lush/tools");
 
 const MAX_PREVIEW_BYTES = 8_000;
+const MAX_INPUT_BYTES = 256_000;
+const MAX_IDEMPOTENCY_KEY_BYTES = 256;
 
 export type InvokeToolRequest = {
   connectionId: string;
   /** External tool name or the stable qualified alias. */
   toolName: string;
   input: unknown;
-  /**
-   * The definition digest the caller resolved its capability against. When
-   * provided, the gateway rejects the call if the stored definition has changed
-   * since, so a catalog change cannot silently alter a tool under a caller.
-   */
-  expectedDefinitionDigest?: string;
+  /** The exact definition digest resolved into the caller's capability. */
+  expectedDefinitionDigest: string;
   idempotencyKey?: string;
   runId?: string;
 };
@@ -84,6 +82,7 @@ export async function invokeTool(
   request: InvokeToolRequest,
   options: InvokeToolOptions = {}
 ): Promise<GatewayOutcome> {
+  validateInvocationRequest(request);
   const connection = await requireVisibleConnection(principal, request.connectionId);
   if (!connection.enabled) {
     return { status: "denied", toolCallId: null, reason: "connection_disabled" };
@@ -94,17 +93,16 @@ export async function invokeTool(
     return { status: "denied", toolCallId: null, reason: "tool_disabled" };
   }
 
-  // Enforce the caller's capability snapshot: if the caller pinned a digest and
-  // the stored definition has since changed, fail closed rather than invoking a
-  // tool whose schema or side-effect class differs from what was authorized.
-  if (
-    request.expectedDefinitionDigest &&
-    request.expectedDefinitionDigest !== definition.definitionDigest
-  ) {
+  // A catalog change must never silently alter a tool under an existing caller.
+  if (request.expectedDefinitionDigest !== definition.definitionDigest) {
     return { status: "denied", toolCallId: null, reason: "definition_changed" };
   }
 
   const input = request.input ?? {};
+  const canonicalInput = canonicalJson(input);
+  if (new TextEncoder().encode(canonicalInput).byteLength > MAX_INPUT_BYTES) {
+    throw new ToolError("input_too_large", "Tool input exceeds 256000 bytes", 413);
+  }
   const validation = validateInput(
     (definition.inputSchema as Record<string, unknown>) ?? {},
     input
@@ -117,18 +115,7 @@ export async function invokeTool(
     );
   }
 
-  const inputDigest = await sha256Hex(canonicalJson(input));
-
-  // Idempotency: a replay with the same key returns the prior call's outcome
-  // rather than executing (or re-inserting, which the unique index forbids). An
-  // in-flight prior is an explicit conflict — we never retry an ambiguous call.
-  if (request.idempotencyKey) {
-    const prior = await findPriorCall(connection.id, request.idempotencyKey);
-    if (prior) {
-      return outcomeFromPriorCall(prior);
-    }
-  }
-
+  const inputDigest = await sha256Hex(canonicalInput);
   const annotations = normalizeAnnotations(definition.annotations);
   const decision = decideApproval(annotations, connection.policy);
 
@@ -149,10 +136,52 @@ export async function invokeTool(
     return { status: "denied", toolCallId, reason: "policy_denied" };
   }
 
+  // Idempotency: a replay with the same key returns the prior call's outcome
+  // rather than executing (or re-inserting, which the unique index forbids). An
+  // in-flight prior is an explicit conflict — we never retry an ambiguous call.
+  let toolCallId: string | undefined;
+  if (request.idempotencyKey) {
+    const prior = await findPriorCall(
+      connection.id,
+      principal.userId,
+      request.idempotencyKey
+    );
+    if (prior) {
+      assertIdempotencyBinding(prior, {
+        definition,
+        definitionDigest: request.expectedDefinitionDigest,
+        inputDigest,
+        runId: request.runId
+      });
+      if (prior.status === "waiting_for_approval") {
+        const approval = await findApprovalForCall(
+          prior.id,
+          principal.organizationId,
+          principal.userId
+        );
+        if (approval?.status === "pending") {
+          return approvalRequiredOutcome(prior.id, approval);
+        }
+        if (approval?.status === "approved") {
+          toolCallId = await consumeApprovalCall(approval.id, request.idempotencyKey);
+        } else if (approval?.status === "denied") {
+          return { status: "denied", toolCallId: prior.id, reason: "approval_denied" };
+        } else {
+          throw new ToolError(
+            "idempotency_conflict",
+            "The prior tool call has an unresolved or expired outcome",
+            409
+          );
+        }
+      } else {
+        return outcomeFromPriorCall(prior);
+      }
+    }
+  }
+
   // An approved, unexpired, single-use approval for this exact input lets the
   // call proceed by reusing its already-created call row.
-  let toolCallId: string;
-  if (decision === "approve") {
+  if (!toolCallId && decision === "approve") {
     const approved = await findApprovedApproval({
       organizationId: principal.organizationId,
       definitionId: definition.id,
@@ -162,32 +191,41 @@ export async function invokeTool(
       inputDigest
     });
     if (!approved) {
-      return requestApproval({
+      try {
+        return await requestApproval({
+          principal,
+          connection,
+          definition,
+          input,
+          inputDigest,
+          runId: request.runId,
+          idempotencyKey: request.idempotencyKey,
+          annotations
+        });
+      } catch (error) {
+        throw idempotencyRace(error, request.idempotencyKey);
+      }
+    }
+    // Consume the approval (single-use) and transition its call to running.
+    toolCallId = await consumeApprovalCall(approved.id, request.idempotencyKey);
+  } else if (!toolCallId) {
+    // Authorized without approval: persist a running call, then invoke.
+    try {
+      toolCallId = await persistCall({
         principal,
         connection,
         definition,
         input,
         inputDigest,
         runId: request.runId,
-        annotations
+        idempotencyKey: request.idempotencyKey,
+        status: "running",
+        policyDecision: { decision, annotations },
+        isError: false
       });
+    } catch (error) {
+      throw idempotencyRace(error, request.idempotencyKey);
     }
-    // Consume the approval (single-use) and transition its call to running.
-    toolCallId = await consumeApprovalCall(approved, request.idempotencyKey);
-  } else {
-    // Authorized without approval: persist a running call, then invoke.
-    toolCallId = await persistCall({
-      principal,
-      connection,
-      definition,
-      input,
-      inputDigest,
-      runId: request.runId,
-      idempotencyKey: request.idempotencyKey,
-      status: "running",
-      policyDecision: { decision, annotations },
-      isError: false
-    });
   }
 
   const limits: ConnectorLimits = {
@@ -280,6 +318,7 @@ export async function decideToolApproval(
     .selectAll()
     .where("id", "=", approvalId)
     .where("organizationId", "=", principal.organizationId)
+    .where("initiatedByUserId", "=", principal.userId)
     .executeTakeFirst();
   if (!approval) {
     throw new ToolError("approval_not_found", "Approval was not found", 404);
@@ -289,43 +328,60 @@ export async function decideToolApproval(
   }
   if (new Date(approval.expiresAt).getTime() < Date.now()) {
     const now = new Date();
-    await db.transaction().execute(async (trx) => {
-      await trx
+    const expired = await db.transaction().execute(async (trx) => {
+      const claimed = await trx
         .updateTable("toolApprovals")
-        .set({ status: "expired" })
+        .set({ status: "expired", decidedAt: now })
         .where("id", "=", approvalId)
-        .execute();
+        .where("status", "=", "pending")
+        .returning("toolCallId")
+        .executeTakeFirst();
+      if (!claimed) return false;
       // Close the associated call so it is not left permanently in-flight.
-      if (approval.toolCallId) {
+      if (claimed.toolCallId) {
         await trx
           .updateTable("toolCalls")
           .set({ status: "cancelled", completedAt: now })
-          .where("id", "=", approval.toolCallId)
+          .where("id", "=", claimed.toolCallId)
+          .where("status", "=", "waiting_for_approval")
           .execute();
       }
+      return true;
     });
+    if (!expired) {
+      throw new ToolError("approval_settled", "Approval was already decided", 409);
+    }
     throw new ToolError("approval_expired", "Approval has expired", 409);
   }
 
   const status = approve ? "approved" : "denied";
   const now = new Date();
-  await db.transaction().execute(async (trx) => {
-    await trx
+  const decided = await db.transaction().execute(async (trx) => {
+    const claimed = await trx
       .updateTable("toolApprovals")
       .set({ status, decidedByUserId: principal.userId, decidedAt: now })
       .where("id", "=", approvalId)
-      .execute();
+      .where("status", "=", "pending")
+      .where("expiresAt", ">", now)
+      .returning("toolCallId")
+      .executeTakeFirst();
+    if (!claimed) return false;
     // On approval the call stays `waiting_for_approval` until the re-invocation
     // consumes the approval and transitions it to `running` (see
     // consumeApprovalCall). On denial the call is terminal.
-    if (!approve && approval.toolCallId) {
+    if (!approve && claimed.toolCallId) {
       await trx
         .updateTable("toolCalls")
         .set({ status: "denied", completedAt: now })
-        .where("id", "=", approval.toolCallId)
+        .where("id", "=", claimed.toolCallId)
+        .where("status", "=", "waiting_for_approval")
         .execute();
     }
+    return true;
   });
+  if (!decided) {
+    throw new ToolError("approval_settled", "Approval was already decided", 409);
+  }
 
   return { approvalId, status };
 }
@@ -354,11 +410,11 @@ export function decideApproval(
   }
   // Default posture: read-only tools run without approval; destructive or
   // open-world tools require explicit approval unless policy says otherwise.
-  if (annotations.readOnly && !annotations.destructive) {
-    return "allow";
-  }
   if (annotations.destructive || annotations.openWorld) {
     return "approve";
+  }
+  if (annotations.readOnly) {
+    return "allow";
   }
   return "allow";
 }
@@ -370,6 +426,7 @@ async function requestApproval(params: {
   input: unknown;
   inputDigest: string;
   runId?: string;
+  idempotencyKey?: string;
   annotations: ToolAnnotations;
 }): Promise<GatewayOutcome> {
   const db = getDb();
@@ -379,7 +436,6 @@ async function requestApproval(params: {
   const { toolCallId, approvalId } = await db.transaction().execute(async (trx) => {
     const call = await insertCall(trx, {
       ...params,
-      idempotencyKey: undefined,
       status: "waiting_for_approval",
       policyDecision: { decision: "approve", annotations: params.annotations },
       isError: false
@@ -418,6 +474,44 @@ async function requestApproval(params: {
   };
 }
 
+async function findApprovalForCall(
+  toolCallId: string,
+  organizationId: string,
+  userId: string
+) {
+  return getDb()
+    .selectFrom("toolApprovals")
+    .selectAll()
+    .where("toolCallId", "=", toolCallId)
+    .where("organizationId", "=", organizationId)
+    .where("initiatedByUserId", "=", userId)
+    .orderBy("createdAt", "desc")
+    .executeTakeFirst();
+}
+
+function approvalRequiredOutcome(
+  toolCallId: string,
+  approval: {
+    id: string;
+    scope: string;
+    definitionDigest: string;
+    inputDigest: string;
+    expiresAt: Date | string;
+  }
+): GatewayOutcome {
+  return {
+    status: "approval_required",
+    toolCallId,
+    approval: {
+      approvalId: approval.id,
+      scope: approval.scope,
+      definitionDigest: approval.definitionDigest,
+      inputDigest: approval.inputDigest,
+      expiresAt: new Date(approval.expiresAt).toISOString()
+    }
+  };
+}
+
 async function findApprovedApproval(params: {
   organizationId: string;
   definitionId: string;
@@ -451,25 +545,38 @@ async function findApprovedApproval(params: {
  * `waiting_for_approval` record behind on re-invocation.
  */
 async function consumeApprovalCall(
-  approval: { id: string; toolCallId: string | null },
+  approvalId: string,
   idempotencyKey: string | undefined
 ): Promise<string> {
   const now = new Date();
   return getDb().transaction().execute(async (trx) => {
-    // Mark the approval consumed so it cannot authorize a second execution.
-    await trx
+    // Claim the approval exactly once. Concurrent re-invocations cannot both
+    // transition the same approved row and execute the side effect.
+    const approval = await trx
       .updateTable("toolApprovals")
       .set({ status: "expired", decidedAt: now })
-      .where("id", "=", approval.id)
-      .execute();
+      .where("id", "=", approvalId)
+      .where("status", "=", "approved")
+      .where("expiresAt", ">", now)
+      .returning("toolCallId")
+      .executeTakeFirst();
+    if (!approval) {
+      throw new ToolError(
+        "approval_unavailable",
+        "Approval was already consumed or has expired",
+        409
+      );
+    }
 
     if (approval.toolCallId) {
-      await trx
+      const call = await trx
         .updateTable("toolCalls")
         .set({ status: "running", idempotencyKey: idempotencyKey ?? null })
         .where("id", "=", approval.toolCallId)
-        .execute();
-      return approval.toolCallId;
+        .where("status", "=", "waiting_for_approval")
+        .returning("id")
+        .executeTakeFirst();
+      if (call) return call.id;
     }
     // Defensive: an approval with no linked call should not occur, but if it
     // does, surface it rather than silently proceeding without a record.
@@ -514,6 +621,69 @@ function outcomeFromPriorCall(prior: {
   }
 }
 
+function validateInvocationRequest(request: InvokeToolRequest): void {
+  if (typeof request.connectionId !== "string" || request.connectionId.length === 0) {
+    throw new ToolError("invalid_invocation", "Connection id is required", 400);
+  }
+  if (
+    typeof request.toolName !== "string" ||
+    request.toolName.length === 0 ||
+    request.toolName.length > 256
+  ) {
+    throw new ToolError("invalid_invocation", "Tool name is invalid", 400);
+  }
+  if (
+    typeof request.expectedDefinitionDigest !== "string" ||
+    request.expectedDefinitionDigest.length === 0 ||
+    request.expectedDefinitionDigest.length > 128
+  ) {
+    throw new ToolError(
+      "definition_digest_required",
+      "A resolved tool definition digest is required",
+      400
+    );
+  }
+  if (request.idempotencyKey !== undefined) {
+    if (
+      typeof request.idempotencyKey !== "string" ||
+      request.idempotencyKey.length === 0 ||
+      new TextEncoder().encode(request.idempotencyKey).byteLength >
+        MAX_IDEMPOTENCY_KEY_BYTES
+    ) {
+      throw new ToolError("invalid_invocation", "Idempotency key is invalid", 400);
+    }
+  }
+  if (request.runId !== undefined && !isUuid(request.runId)) {
+    throw new ToolError("invalid_invocation", "Run id must be a UUID", 400);
+  }
+}
+
+function isUuid(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+      value
+    )
+  );
+}
+
+function idempotencyRace(error: unknown, idempotencyKey: string | undefined): unknown {
+  if (
+    idempotencyKey &&
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    error.code === "23505"
+  ) {
+    return new ToolError(
+      "idempotency_conflict",
+      "A concurrent tool call already claimed this idempotency key",
+      409
+    );
+  }
+  return error;
+}
+
 async function loadDefinition(
   connectionId: string,
   toolName: string
@@ -532,13 +702,46 @@ async function loadDefinition(
   return row;
 }
 
-async function findPriorCall(connectionId: string, idempotencyKey: string) {
+async function findPriorCall(
+  connectionId: string,
+  userId: string,
+  idempotencyKey: string
+) {
   return getDb()
     .selectFrom("toolCalls")
     .selectAll()
     .where("connectionId", "=", connectionId)
+    .where("initiatedByUserId", "=", userId)
     .where("idempotencyKey", "=", idempotencyKey)
     .executeTakeFirst();
+}
+
+function assertIdempotencyBinding(
+  prior: {
+    toolDefinitionId: string | null;
+    definitionDigest: string;
+    inputDigest: string;
+    runId: string | null;
+  },
+  current: {
+    definition: ToolDefinitionRow;
+    definitionDigest: string;
+    inputDigest: string;
+    runId?: string;
+  }
+): void {
+  const sameOperation =
+    prior.toolDefinitionId === current.definition.id &&
+    prior.definitionDigest === current.definitionDigest &&
+    prior.inputDigest === current.inputDigest &&
+    prior.runId === (current.runId ?? null);
+  if (!sameOperation) {
+    throw new ToolError(
+      "idempotency_mismatch",
+      "Idempotency key was already used for a different tool operation",
+      409
+    );
+  }
 }
 
 async function persistCall(params: PersistCallParams): Promise<string> {
@@ -574,6 +777,7 @@ async function insertCall(
       status: params.status,
       input: params.input,
       inputDigest: params.inputDigest,
+      definitionDigest: params.definition.definitionDigest,
       isError: params.isError,
       policyDecision: params.policyDecision,
       idempotencyKey: params.idempotencyKey ?? null,

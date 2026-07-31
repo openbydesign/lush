@@ -19,7 +19,11 @@ import type {
 import type { Transaction } from "kysely";
 import type { Database } from "@lush/db/schema";
 import { buildConnector, parseMcpConfig } from "./connector-factory";
-import { ConnectorError, type NormalizedToolDefinition } from "./connectors/types";
+import {
+  ConnectorError,
+  restrictiveAnnotations,
+  type NormalizedToolDefinition
+} from "./connectors/types";
 import { digestValue } from "./digest";
 import { decryptSecret, encryptSecret } from "./secrets";
 
@@ -92,6 +96,16 @@ export type UpdateToolConnectionRequest = {
   secret?: string | null;
 };
 
+/** Phase-2 rollout gate. Absence/default false keeps every HTTP route dark. */
+export async function isToolGatewayEnabled(organizationId: string): Promise<boolean> {
+  const organization = await getDb()
+    .selectFrom("organizations")
+    .select("toolGatewayEnabled")
+    .where("id", "=", organizationId)
+    .executeTakeFirst();
+  return organization?.toolGatewayEnabled === true;
+}
+
 export async function listToolConnections(
   principal: ToolsPrincipal
 ): Promise<ToolConnectionSummary[]> {
@@ -117,7 +131,13 @@ export async function createToolConnection(
   principal: ToolsPrincipal,
   request: CreateToolConnectionRequest
 ): Promise<ToolConnectionSummary> {
-  const label = request.label?.trim();
+  if (request.scope !== "organization" && request.scope !== "user") {
+    throw new ToolError("invalid_connection", "Connection scope must be organization or user");
+  }
+  if (request.source !== "native" && request.source !== "mcp" && request.source !== "openapi") {
+    throw new ToolError("invalid_connection", "Connection source is invalid");
+  }
+  const label = typeof request.label === "string" ? request.label.trim() : "";
   if (!label) {
     throw new ToolError("invalid_connection", "A connection label is required");
   }
@@ -129,9 +149,26 @@ export async function createToolConnection(
     );
   }
 
+  const credentialMode = request.credentialMode ?? "none";
+  if (
+    credentialMode !== "none" &&
+    credentialMode !== "organization" &&
+    credentialMode !== "user_delegated"
+  ) {
+    throw new ToolError("invalid_connection", "Credential mode is invalid");
+  }
+  if (request.secret !== undefined && typeof request.secret !== "string") {
+    throw new ToolError("invalid_connection", "Connection secret must be a string");
+  }
+  if (request.secret?.trim() && credentialMode === "none") {
+    throw new ToolError(
+      "invalid_connection",
+      "A secret requires an explicit credential mode"
+    );
+  }
+
   const source = request.source;
   const endpointConfig = normalizeEndpoint(source, request.endpoint);
-  const credentialMode = request.credentialMode ?? "none";
   const ownerUserId = request.scope === "user" ? principal.userId : null;
 
   if (credentialMode === "user_delegated" && request.scope !== "user") {
@@ -184,6 +221,13 @@ export async function updateToolConnection(
   principal: ToolsPrincipal,
   request: UpdateToolConnectionRequest
 ): Promise<ToolConnectionSummary> {
+  if (
+    request.secret !== undefined &&
+    request.secret !== null &&
+    typeof request.secret !== "string"
+  ) {
+    throw new ToolError("invalid_connection", "Connection secret must be a string");
+  }
   const connection = await requireConnectionForManagement(principal, request.connectionId);
   const db = getDb();
   const now = new Date();
@@ -208,6 +252,12 @@ export async function updateToolConnection(
         .where("connectionId", "=", connection.id)
         .execute();
     } else if (typeof request.secret === "string" && request.secret.trim()) {
+      if (connection.credentialMode === "none") {
+        throw new ToolError(
+          "invalid_connection",
+          "A secret cannot be stored for a connection with credential mode none"
+        );
+      }
       await storeCredential(trx, {
         connectionId: connection.id,
         subjectUserId:
@@ -259,7 +309,7 @@ export async function discoverConnectionCatalog(
   connectionId: string,
   signal: AbortSignal
 ): Promise<ToolDefinitionSummary[]> {
-  const connection = await requireVisibleConnection(principal, connectionId);
+  const connection = await requireConnectionForManagement(principal, connectionId);
   const credential = await resolveCredential(connection, principal.userId);
   const connector = buildConnector({ connection, credential });
 
@@ -276,9 +326,10 @@ export async function discoverConnectionCatalog(
   }
 
   const now = new Date();
-  const catalogVersion = await digestValue(
-    discovered.map((tool) => tool.externalName).sort()
+  const orderedDiscovered = [...discovered].sort((a, b) =>
+    a.externalName.localeCompare(b.externalName)
   );
+  const catalogVersion = await digestValue(orderedDiscovered);
 
   await getDb().transaction().execute(async (trx) => {
     const externalNames = discovered.map((tool) => tool.externalName);
@@ -292,7 +343,13 @@ export async function discoverConnectionCatalog(
     await deleteStale.execute();
 
     for (const tool of discovered) {
-      const definitionDigest = await digestValue(tool);
+      // Native annotations are Lush-owned code. Remote annotations are
+      // untrusted source hints, so the effective persisted policy remains
+      // restrictive until a future explicit review surface assigns it.
+      const annotations =
+        connection.source === "native" ? tool.annotations : restrictiveAnnotations;
+      const effectiveDefinition = { ...tool, annotations };
+      const definitionDigest = await digestValue(effectiveDefinition);
       await trx
         .insertInto("toolDefinitions")
         .values({
@@ -303,7 +360,7 @@ export async function discoverConnectionCatalog(
           description: tool.description,
           inputSchema: tool.inputSchema,
           outputSchema: tool.outputSchema ?? null,
-          annotations: tool.annotations,
+          annotations,
           definitionDigest,
           enabled: true,
           createdAt: now,
@@ -485,13 +542,18 @@ function normalizeEndpoint(
     return {};
   }
   if (source === "mcp") {
+    if (endpoint?.headers && Object.keys(endpoint.headers).length > 0) {
+      throw new ToolError(
+        "invalid_endpoint",
+        "Static endpoint headers are not supported; use an encrypted credential binding"
+      );
+    }
     // Validate structure now so an invalid URL fails at create time. Surface the
     // connector's error as a structured ToolError so the API reports a specific
     // code instead of a generic gateway failure.
     try {
       return parseMcpConfig({
-        url: endpoint?.url,
-        headers: endpoint?.headers
+        url: endpoint?.url
       });
     } catch (error) {
       if (error instanceof ConnectorError) {

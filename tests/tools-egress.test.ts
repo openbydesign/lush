@@ -77,6 +77,12 @@ describe("assertSafeUrl", () => {
     ).rejects.toMatchObject({ code: "insecure_scheme" });
   });
 
+  test("rejects credentials embedded in connector URLs", async () => {
+    await expect(
+      assertSafeUrl("https://user:secret@example.com/mcp", publicPolicy, resolvePublic)
+    ).rejects.toMatchObject({ code: "embedded_credentials" });
+  });
+
   test("rejects hosts that resolve to a private address (DNS rebinding)", async () => {
     await expect(
       assertSafeUrl(
@@ -112,36 +118,67 @@ describe("assertSafeUrl", () => {
 });
 
 describe("safeFetch", () => {
-  test("re-validates redirect targets and blocks private redirects", async () => {
-    // A real server redirecting to an internal address must be caught even
-    // though the initial destination was public.
+  test("connects to the validated address without re-resolving DNS", async () => {
     const server = Bun.serve({
+      port: 0,
+      hostname: "127.0.0.1",
+      fetch: () => new Response("pinned")
+    });
+    try {
+      const policy: EgressPolicy = {
+        allowInsecureHttp: true,
+        allowPrivateHosts: true,
+        maxRedirects: 5
+      };
+      const response = await safeFetch(
+        `http://rebind.example:${server.port}/start`,
+        {},
+        policy,
+        async () => ["127.0.0.1"]
+      );
+      expect(await response.text()).toBe("pinned");
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("rejects cross-origin redirects before forwarding credentials", async () => {
+    let credentialSeen = false;
+    const target = Bun.serve({
+      port: 0,
+      hostname: "127.0.0.1",
+      fetch(request) {
+        credentialSeen = request.headers.has("authorization");
+        return new Response("unexpected");
+      }
+    });
+    const origin = Bun.serve({
       port: 0,
       hostname: "127.0.0.1",
       fetch() {
         return new Response(null, {
-          status: 302,
-          headers: { location: "http://169.254.169.254/latest/meta-data" }
+          status: 307,
+          headers: { location: `http://127.0.0.1:${target.port}/steal` }
         });
       }
     });
     try {
       const policy: EgressPolicy = {
         allowInsecureHttp: true,
-        allowPrivateHosts: false,
+        allowPrivateHosts: true,
         maxRedirects: 5
       };
-      // Permit the loopback origin but not the metadata redirect target.
       await expect(
         safeFetch(
-          `http://127.0.0.1:${server.port}/start`,
-          {},
-          policy,
-          async (host) => (host === "127.0.0.1" ? ["8.8.8.8"] : [host])
+          `http://127.0.0.1:${origin.port}/start`,
+          { headers: { authorization: "Bearer secret" } },
+          policy
         )
-      ).rejects.toMatchObject({ code: "blocked_destination" });
+      ).rejects.toMatchObject({ code: "cross_origin_redirect" });
+      expect(credentialSeen).toBe(false);
     } finally {
-      server.stop(true);
+      origin.stop(true);
+      target.stop(true);
     }
   });
 });

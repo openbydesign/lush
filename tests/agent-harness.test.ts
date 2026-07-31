@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { ToolResult } from "../services/tools/src/connectors/types";
 import {
   ConversationBusyError,
+  AmbiguousToolOutcomeError,
   HarnessExecutionError,
   HarnessProtocolError,
   HarnessResolutionError,
@@ -57,7 +58,11 @@ describe("resumptionState", () => {
   const base = { conversationId: "c", execId: "e", harnessId: "h", messages: [] };
   test("empty log has no state", () => {
     expect(resumptionState([])).toEqual({
-      currentState: null, boundHarnessId: null, lastStep: 0, needsResume: false
+      currentState: null,
+      boundHarnessId: null,
+      lastStep: 0,
+      needsResume: false,
+      needsAcknowledgment: false
     });
   });
   test("a pending tail needs resume; binding is sticky", () => {
@@ -194,6 +199,48 @@ describe("orchestrator runExec", () => {
     expect(events.at(-1)!.state).toBe("completed");
   });
 
+  test("does not re-run an interrupted turn after a tool call was emitted", async () => {
+    const { log, inFlight, harness } = setup(echoHarness("h"));
+    await log.append({
+      conversationId: "c1",
+      execId: "exec0",
+      harnessId: "h",
+      kind: "input",
+      messages: [textMessage("user", "mutate")],
+      state: "pending"
+    });
+    await log.append({
+      conversationId: "c1",
+      execId: "exec0",
+      harnessId: "h",
+      kind: "output",
+      messages: [
+        {
+          role: "assistant",
+          content: { type: "tool_call", id: "call-1", name: "mutate", arguments: {} }
+        }
+      ],
+      state: "pending"
+    });
+
+    expect(resumptionState(await log.events("c1"))).toMatchObject({
+      needsResume: false,
+      needsAcknowledgment: true
+    });
+    await expect(
+      collect(
+        runExec({
+          request: { conversationId: "c1", inputs: [] },
+          log,
+          harness,
+          inFlight,
+          signal: signal()
+        })
+      )
+    ).rejects.toBeInstanceOf(AmbiguousToolOutcomeError);
+    expect(await log.events("c1")).toHaveLength(2);
+  });
+
   test("abandoning iteration early still terminates the turn and frees the lock", async () => {
     const multi = scriptedHarness("h", async function* () {
       yield { type: "outputs", messages: [textMessage("assistant", "one")] };
@@ -316,8 +363,12 @@ describe("tool gateway bridge", () => {
   });
 
   test("executor turns a gateway failure into an error tool result", async () => {
-    const executor = createGatewayExecutor(async () => {
-      throw new Error("connection_disabled");
+    const executor = createGatewayExecutor({
+      runId: "run-1",
+      resolveBinding: async () => ({ connectionId: "connection-1", definitionDigest: "digest-1" }),
+      invoke: async () => {
+        throw new Error("connection_disabled");
+      }
     });
     const result = await executor.execute(call, signal());
     expect(result.isError).toBe(true);
@@ -325,11 +376,19 @@ describe("tool gateway bridge", () => {
   });
 
   test("a tool-calling harness flows tool_call and tool_result through the log", async () => {
-    const executor = createGatewayExecutor(async ({ name, arguments: args }) => ({
-      isError: false,
-      content: [{ type: "text", text: "ok" }],
-      structured: { echoed: args, tool: name }
-    }));
+    const seen: Array<Record<string, unknown>> = [];
+    const executor = createGatewayExecutor({
+      runId: "run-1",
+      resolveBinding: async () => ({ connectionId: "connection-1", definitionDigest: "digest-1" }),
+      invoke: async (params) => {
+        seen.push(params);
+        return {
+          isError: false,
+          content: [{ type: "text", text: "ok" }],
+          structured: { echoed: params.arguments, tool: params.name }
+        };
+      }
+    });
     const runtime = toolCallingHarness({ id: "h", executor, toolName: "current_time" });
     const log = new InMemoryEventLog();
     const frames = await collect(
@@ -345,6 +404,13 @@ describe("tool gateway bridge", () => {
     expect(frames).toHaveLength(3);
     const contentTypes = frames.map((f) => f.outputs[0]!.content.type);
     expect(contentTypes).toEqual(["tool_call", "tool_result", "text"]);
+    expect(seen[0]).toMatchObject({
+      connectionId: "connection-1",
+      expectedDefinitionDigest: "digest-1",
+      runId: "run-1",
+      name: "current_time"
+    });
+    expect(seen[0]!.idempotencyKey).toBe(`run-1:${seen[0]!.callId}`);
 
     const events = await log.events("c1");
     const toolResultEvent = events.find(

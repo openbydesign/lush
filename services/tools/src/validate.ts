@@ -9,6 +9,7 @@
  */
 
 import type { JsonSchema } from "./connectors/types";
+import { canonicalJson } from "./digest";
 
 export type ValidationResult =
   | { ok: true }
@@ -123,5 +124,5 @@ function isObject(value: unknown): value is Record<string, unknown> {
 }
 
 function deepEqual(a: unknown, b: unknown): boolean {
-  return JSON.stringify(a) === JSON.stringify(b);
+  return canonicalJson(a) === canonicalJson(b);
 }
