@@ -17,6 +17,18 @@ import {
 } from "./session-context";
 import { normalizeAgentChatMessages } from "./chat-request";
 import {
+  scheduleAgentRunExecution,
+  startAgentRunRecoveryLoop
+} from "./run-executor";
+import {
+  AgentRunError,
+  cancelAgentRun,
+  createAgentRun,
+  fetchAgentRun,
+  type AgentRunPrincipal
+} from "./runs";
+import { exposedAgentRunHeaders, streamDurableRun } from "./run-stream";
+import {
   agentStreamContentType,
   agentTextEventStream,
   encodeAgentStreamEvent
@@ -32,6 +44,7 @@ const corsHeaders = {
   "access-control-allow-origin": agentConfig.LUSH_APP_ORIGIN,
   "access-control-allow-methods": "GET,POST,OPTIONS",
   "access-control-allow-headers": "authorization,content-type",
+  "access-control-expose-headers": exposedAgentRunHeaders.join(","),
   "access-control-max-age": "86400"
 };
 
@@ -62,6 +75,60 @@ const server = Bun.serve({
       return Response.json(auth.session, { headers: corsHeaders });
     }
 
+    const createRunMatch = url.pathname.match(/^\/sessions\/([^/]+)\/runs$/);
+    if (request.method === "POST" && createRunMatch) {
+      const auth = await authenticate(request);
+      if (!auth) return unauthorized();
+      const principal = runPrincipal(auth.principal);
+      if (!principal) return organizationRequired();
+      try {
+        const body = await request.json().catch(() => undefined);
+        const { run } = await createAgentRun(
+          principal,
+          decodeURIComponent(createRunMatch[1] ?? ""),
+          body
+        );
+        void scheduleAgentRunExecution(run.id);
+        return streamDurableRun(principal, run.id, request, 0, corsHeaders);
+      } catch (error) {
+        return agentRunError(error, "Unable to create agent run");
+      }
+    }
+
+    const runMatch = url.pathname.match(/^\/runs\/([^/]+)(?:\/(events|cancel))?$/);
+    if (runMatch) {
+      const auth = await authenticate(request);
+      if (!auth) return unauthorized();
+      const principal = runPrincipal(auth.principal);
+      if (!principal) return organizationRequired();
+      const runId = decodeURIComponent(runMatch[1] ?? "");
+      try {
+        if (request.method === "GET" && !runMatch[2]) {
+          return Response.json(await fetchAgentRun(principal, runId), {
+            headers: corsHeaders
+          });
+        }
+        if (request.method === "GET" && runMatch[2] === "events") {
+          await fetchAgentRun(principal, runId);
+          const after = Number.parseInt(url.searchParams.get("after") ?? "0", 10);
+          return streamDurableRun(
+            principal,
+            runId,
+            request,
+            Number.isSafeInteger(after) && after > 0 ? after : 0,
+            corsHeaders
+          );
+        }
+        if (request.method === "POST" && runMatch[2] === "cancel") {
+          return Response.json(await cancelAgentRun(principal, runId), {
+            headers: corsHeaders
+          });
+        }
+      } catch (error) {
+        return agentRunError(error, "Unable to access agent run");
+      }
+    }
+
     const agentRouteMatch = url.pathname.match(
       /^\/agents\/([^/]+)\/(chat|prompt)$/
     );
@@ -90,6 +157,8 @@ const server = Bun.serve({
     );
   }
 });
+
+startAgentRunRecoveryLoop();
 
 logger.info(
   {
@@ -276,5 +345,32 @@ function unauthorized() {
   return Response.json(
     { error: "unauthorized" },
     { status: 401, headers: corsHeaders }
+  );
+}
+
+function organizationRequired() {
+  return Response.json(
+    { error: "organization_required", message: "An active organization is required" },
+    { status: 403, headers: corsHeaders }
+  );
+}
+
+function runPrincipal(principal: Principal): AgentRunPrincipal | undefined {
+  return principal.organizationId
+    ? { userId: principal.userId, organizationId: principal.organizationId }
+    : undefined;
+}
+
+function agentRunError(error: unknown, fallback: string) {
+  if (error instanceof AgentRunError) {
+    return Response.json(
+      { error: error.code, message: error.message },
+      { status: error.status, headers: corsHeaders }
+    );
+  }
+  logger.error({ err: error }, fallback);
+  return Response.json(
+    { error: "agent_run_failed", message: fallback },
+    { status: 500, headers: corsHeaders }
   );
 }

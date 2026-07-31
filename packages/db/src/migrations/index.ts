@@ -10,6 +10,7 @@ import { sessionIpColumns } from "./009_session_ip_columns";
 import { organizationInviteTokens } from "./010_organization_invite_tokens";
 import { inferenceModelCapabilities } from "./011_inference_model_capabilities";
 import { toolGateway } from "./012_tool_gateway";
+import { agentRuns } from "./013_agent_runs";
 import type { Migration } from "./types";
 
 export const migrations: Migration[] = [
@@ -24,5 +25,6 @@ export const migrations: Migration[] = [
   sessionIpColumns,
   organizationInviteTokens,
   inferenceModelCapabilities,
-  toolGateway
+  toolGateway,
+  agentRuns
 ];

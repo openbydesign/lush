@@ -107,10 +107,12 @@
         "@lush/authz": "workspace:*",
         "@lush/code": "workspace:*",
         "@lush/config": "workspace:*",
+        "@lush/db": "workspace:*",
         "@lush/inference": "workspace:*",
         "@lush/logging": "workspace:*",
         "@lush/sessions": "workspace:*",
         "@lush/tools": "workspace:*",
+        "kysely": "^0.28.7",
       },
       "devDependencies": {
         "@types/node": "^24.0.0",

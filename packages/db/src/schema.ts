@@ -6,7 +6,22 @@ import type {
   Updateable
 } from "kysely";
 
+/** Stable identities for the built-in Lush agent's first immutable revision. */
+export const builtinLushAgentId = "00000000-0000-4000-8000-000000000101";
+export const builtinLushRevisionId = "00000000-0000-4000-8000-000000000102";
+export const builtinLushRevisionInstructions =
+  "You are Lush, a concise and practical AI agent inside the Lush app.\n\n" +
+  "Answer directly, ask clarifying questions when needed, and avoid claiming tool\n" +
+  "access until tools are explicitly connected.\n";
+export const builtinLushRevisionDigest =
+  "9370875a1a258a08f7167fa64ec72e256179bbcbaea1e8431394f4ab26b4c103";
+
 export type Timestamp = ColumnType<Date, Date | string | undefined, Date | string>;
+export type NullableTimestamp = ColumnType<
+  Date | null,
+  Date | string | null | undefined,
+  Date | string | null
+>;
 
 export type UserRole = "admin" | "user";
 export type OrganizationInviteStatus = "pending" | "accepted" | "declined";
@@ -204,6 +219,9 @@ export type SessionThreadsTable = {
   ownerUserId: string;
   title: string;
   agentId: string;
+  agentInstallationId: Generated<string | null>;
+  agentRevisionId: Generated<string | null>;
+  currentRunId: Generated<string | null>;
   projectId: string | null;
   pinnedAt: Timestamp | null;
   stateBytes: number;
@@ -251,6 +269,7 @@ export type SessionMessagesTable = {
   tokenCount: number | null;
   byteSize: number;
   createdAt: Timestamp;
+  supersededAt: NullableTimestamp;
 };
 
 export type SessionStateSnapshotsTable = {
@@ -290,6 +309,7 @@ export type ToolCallStatus =
   | "succeeded"
   | "failed"
   | "denied"
+  | "outcome_unknown"
   | "cancelled";
 export type ToolApprovalScope =
   | "once"
@@ -297,6 +317,165 @@ export type ToolApprovalScope =
   | "once_per_resource"
   | "every_call";
 export type ToolApprovalStatus = "pending" | "approved" | "denied" | "expired";
+
+export type AgentRunStatus =
+  | "queued"
+  | "running"
+  | "waiting_for_approval"
+  | "needs_acknowledgment"
+  | "completed"
+  | "failed"
+  | "cancelled";
+export type AgentEnvironmentStatus =
+  | "provisioning"
+  | "ready"
+  | "running"
+  | "idle"
+  | "hibernated"
+  | "failed"
+  | "destroyed";
+
+export type ManagedAgentsTable = {
+  id: Generated<string>;
+  organizationId: string | null;
+  slug: string;
+  name: string;
+  systemOwned: boolean;
+  createdAt: Timestamp;
+  updatedAt: Timestamp;
+};
+
+export type ManagedAgentRevisionsTable = {
+  id: Generated<string>;
+  agentId: string;
+  version: number;
+  instructions: string;
+  modelPolicy: unknown;
+  executionProfile: "chat" | "code" | "work";
+  limits: unknown;
+  digest: string;
+  createdAt: Timestamp;
+  publishedAt: Timestamp;
+};
+
+export type AgentInstallationsTable = {
+  id: Generated<string>;
+  organizationId: string;
+  agentId: string;
+  ownerUserId: string | null;
+  status: "active" | "disabled";
+  createdAt: Timestamp;
+  updatedAt: Timestamp;
+};
+
+export type AgentInstallationRevisionsTable = {
+  id: Generated<string>;
+  installationId: string;
+  agentRevisionId: string;
+  parentInstallationRevisionId: string | null;
+  additionalInstructions: string;
+  capabilityPolicy: unknown;
+  modelOverride: unknown | null;
+  digest: string;
+  createdAt: Timestamp;
+};
+
+export type AgentEnvironmentsTable = {
+  id: Generated<string>;
+  organizationId: string;
+  ownerUserId: string;
+  sessionId: string;
+  profile: "chat" | "code" | "work";
+  status: AgentEnvironmentStatus;
+  isolationProvider: string;
+  backendHandle: string | null;
+  imageDigest: string;
+  limits: unknown;
+  leaseExpiresAt: Timestamp | null;
+  retentionUntil: Timestamp | null;
+  createdAt: Timestamp;
+  updatedAt: Timestamp;
+  destroyedAt: Timestamp | null;
+};
+
+export type AgentRunsTable = {
+  id: Generated<string>;
+  organizationId: string;
+  sessionId: string;
+  originMessageId: string;
+  assistantMessageId: string | null;
+  initiatedByUserId: string;
+  agentRevisionId: string;
+  environmentId: string;
+  status: AgentRunStatus;
+  purpose: "chat" | "title";
+  idempotencyKey: string;
+  startDigest: string;
+  capabilityDigest: string;
+  configurationDigest: string;
+  configuration: unknown;
+  isolationProvider: string;
+  untrustedContentIngested: boolean;
+  limits: unknown;
+  modelSelection: string;
+  errorCode: string | null;
+  errorMessage: string | null;
+  leaseOwner: string | null;
+  leaseExpiresAt: Timestamp | null;
+  createdAt: Timestamp;
+  updatedAt: Timestamp;
+  startedAt: Timestamp | null;
+  completedAt: Timestamp | null;
+  cancelledAt: Timestamp | null;
+};
+
+export type AgentRunInstallationRevisionsTable = {
+  runId: string;
+  installationRevisionId: string;
+  organizationId: string;
+};
+
+export type AgentRunCapabilitiesTable = {
+  id: Generated<string>;
+  runId: string;
+  organizationId: string;
+  principalUserId: string;
+  snapshot: unknown;
+  digest: string;
+  revokedAt: Timestamp | null;
+  createdAt: Timestamp;
+};
+
+export type AgentRunEventsTable = {
+  id: Generated<string>;
+  runId: string;
+  organizationId: string;
+  sequence: number;
+  type: string;
+  payload: unknown;
+  createdAt: Timestamp;
+};
+
+export type AgentRunArtifactsTable = {
+  id: Generated<string>;
+  runId: string;
+  organizationId: string;
+  artifactId: string;
+  kind: string;
+  createdAt: Timestamp;
+};
+
+export type AgentRunAcknowledgmentsTable = {
+  id: Generated<string>;
+  runId: string;
+  organizationId: string;
+  toolCallId: string;
+  decidedByUserId: string;
+  decision: "retry" | "abandon";
+  inputDigest: string;
+  toolDefinitionDigest: string;
+  createdAt: Timestamp;
+};
 
 export type ToolAnnotations = {
   readOnly: boolean;
@@ -417,6 +596,17 @@ export type Database = {
   toolDefinitions: ToolDefinitionsTable;
   toolCalls: ToolCallsTable;
   toolApprovals: ToolApprovalsTable;
+  managedAgents: ManagedAgentsTable;
+  managedAgentRevisions: ManagedAgentRevisionsTable;
+  agentInstallations: AgentInstallationsTable;
+  agentInstallationRevisions: AgentInstallationRevisionsTable;
+  agentEnvironments: AgentEnvironmentsTable;
+  agentRuns: AgentRunsTable;
+  agentRunInstallationRevisions: AgentRunInstallationRevisionsTable;
+  agentRunCapabilities: AgentRunCapabilitiesTable;
+  agentRunEvents: AgentRunEventsTable;
+  agentRunArtifacts: AgentRunArtifactsTable;
+  agentRunAcknowledgments: AgentRunAcknowledgmentsTable;
 };
 
 export type User = Selectable<UsersTable>;
@@ -437,3 +627,9 @@ export type ToolCredentialBindingRow = Selectable<ToolCredentialBindingsTable>;
 export type ToolDefinitionRow = Selectable<ToolDefinitionsTable>;
 export type ToolCallRow = Selectable<ToolCallsTable>;
 export type ToolApprovalRow = Selectable<ToolApprovalsTable>;
+export type ManagedAgentRow = Selectable<ManagedAgentsTable>;
+export type ManagedAgentRevisionRow = Selectable<ManagedAgentRevisionsTable>;
+export type AgentInstallationRow = Selectable<AgentInstallationsTable>;
+export type AgentEnvironmentRow = Selectable<AgentEnvironmentsTable>;
+export type AgentRunRow = Selectable<AgentRunsTable>;
+export type AgentRunEventRow = Selectable<AgentRunEventsTable>;

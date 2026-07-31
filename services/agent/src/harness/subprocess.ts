@@ -172,7 +172,9 @@ class SubprocessHarness implements Harness {
 
     // Surface async spawn/stdin errors (e.g. ENOENT, EPIPE) instead of crashing.
     let ioError: Error | null = null;
-    child.on("error", (error) => {
+    (child as unknown as {
+      on(event: "error", listener: (error: Error) => void): void;
+    }).on("error", (error: Error) => {
       ioError = error;
     });
     child.stdin.on("error", () => {});

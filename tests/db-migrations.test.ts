@@ -1,5 +1,10 @@
 import { expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { migrations } from "../packages/db/src/migrations";
+import {
+  builtinLushRevisionDigest,
+  builtinLushRevisionInstructions
+} from "../packages/db/src/schema";
 
 test("database migrations are registered in id order with unique ids", () => {
   const ids = migrations.map((migration) => migration.id);
@@ -22,8 +27,34 @@ test("database migration ids match their ordinal prefix", () => {
     "009_session_ip_columns",
     "010_organization_invite_tokens",
     "011_inference_model_capabilities",
-    "012_tool_gateway"
+    "012_tool_gateway",
+    "013_agent_runs"
   ]);
+});
+
+test("durable agent runs are append-only, scoped, and resumable", async () => {
+  const migration = await Bun.file(
+    "packages/db/src/migrations/013_agent_runs.ts"
+  ).text();
+
+  expect(migration).toContain("create table if not exists agent_runs");
+  expect(migration).toContain("unique(run_id, sequence)");
+  expect(migration).toContain("agent_runs_one_active_per_session_idx");
+  expect(migration).toContain("origin_message_id uuid not null");
+  expect(migration).toContain("configuration_digest text not null");
+  expect(migration).toContain("agent_run_capabilities");
+  expect(migration).toContain("agent_run_artifacts");
+  expect(migration).toContain("alter table tool_calls add column if not exists run_id uuid");
+  expect(migration).toContain("alter table tool_approvals add column if not exists run_id uuid");
+  expect(migration).toContain("drop constraint if exists tool_calls_run_id_fkey");
+  expect(migration).toContain("drop constraint if exists tool_approvals_run_id_fkey");
+  expect(migration).toContain("validate constraint tool_calls_run_id_fkey");
+  expect(migration).toContain("validate constraint tool_approvals_run_id_fkey");
+});
+
+test("the built-in Lush revision digest matches its immutable instructions", () => {
+  expect(createHash("sha256").update(builtinLushRevisionInstructions).digest("hex"))
+    .toBe(builtinLushRevisionDigest);
 });
 
 test("model capabilities are added append-only as structured JSON", async () => {

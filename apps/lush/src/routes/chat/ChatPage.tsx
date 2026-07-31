@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import {
+  ApiError,
+  cancelAgentRun,
   type InferenceProviderStatus,
   type Session,
   type UserRole,
@@ -43,18 +45,19 @@ import {
 } from "../../lib/app-data";
 import {
   appendAgentStreamEvent,
+  agentChatMessage,
   chatMessageFromSession,
   chatMessageMetadata,
   chatMessageRequestText,
   chatMessageText,
   promptAttachments,
-  readAgentEventStream
+  readAgentRunEventStream
 } from "../../lib/agent-message";
 import {
   agentResponseErrorMessage,
-  generateAndPersistSessionTitle,
   getModelLabel,
-  postSessionChat,
+  postAgentRun,
+  reconnectAgentRun,
   titleFromContent
 } from "../../lib/chat-stream";
 import type {
@@ -64,7 +67,6 @@ import type {
 } from "../../lib/types";
 import { Message } from "../../ui/Message";
 import { MessageScroller, MessageScrollerItem } from "../../ui/MessageScroller";
-import { agentChatDeltaMessages } from "../../lib/agent-chat-request";
 import {
   chatModelSelectionFromSession,
   modelSelectionName,
@@ -98,19 +100,10 @@ export function ChatPage(props: {
     title: string;
     projectId?: string | null;
   }) => Promise<string>;
-  onAppendSessionMessage: (
-    sessionId: string,
-    message: {
-      role: "user" | "assistant";
-      content: string;
-      metadata?: unknown;
-    }
-  ) => Promise<string>;
   onTruncateSession: (
     sessionId: string,
     afterMessageId: string | null
   ) => Promise<Session>;
-  onSessionTitleChange: (sessionId: string, title: string) => Promise<void>;
   onMessageFeedback: (
     sessionId: string,
     messageId: string,
@@ -124,6 +117,8 @@ export function ChatPage(props: {
   const navigate = useNavigate();
   const location = useLocation();
   const abortControllerRef = useRef<AbortController | undefined>(undefined);
+  const activeRunIdRef = useRef<string | undefined>(undefined);
+  const stopRequestedRef = useRef(false);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const composerContainerRef = useRef<HTMLDivElement>(null);
   const syncedSessionKeyRef = useRef<number | undefined>(undefined);
@@ -306,8 +301,6 @@ export function ChatPage(props: {
     if ((!content && attachments.length === 0) || isStreaming) return;
 
     const createdAt = new Date().toISOString();
-    const shouldGenerateSessionTitle =
-      !options.retainedUser && !options.sessionId && !activeSessionId && messages.length === 0;
     const modelSelection = activeModelSelection;
     const userMessage: ChatMessage = options.retainedUser ?? {
       id: createId(),
@@ -324,7 +317,7 @@ export function ChatPage(props: {
       parts: [],
       status: "streaming"
     };
-    const requestMessages = agentChatDeltaMessages(userMessage);
+    const idempotencyKey = `chat-turn:${createId()}`;
     setError("");
     if (!options.retainedUser) setInput("");
     setIsStreaming(true);
@@ -335,6 +328,7 @@ export function ChatPage(props: {
     ]);
 
     abortControllerRef.current = new AbortController();
+    stopRequestedRef.current = false;
     let sessionId = options.sessionId ?? activeSessionId;
     let assistantParts: ChatMessagePart[] = [];
 
@@ -352,101 +346,143 @@ export function ChatPage(props: {
         );
       }
 
-      if (!options.retainedUser) {
-        const userServerId = await props.onAppendSessionMessage(sessionId, {
-          role: "user",
-          content: chatMessageRequestText(userMessage),
-          metadata: chatMessageMetadata(userMessage.parts)
-        });
-        setMessages((current) =>
-          current.map((message) =>
-            message.id === userMessage.id
-              ? { ...message, serverId: userServerId }
-              : message
-          )
-        );
-      }
-
       let token = await props.ensureSession();
-      let response = await postSessionChat(
-        props.apiBaseUrl,
-        token,
-        modelSelection,
-        sessionId,
-        requestMessages,
-        abortControllerRef.current.signal
-      );
-
-      if (response.status === 401) {
-        token = await props.ensureSession(true);
-        response = await postSessionChat(
-          props.apiBaseUrl,
-          token,
-          modelSelection,
-          sessionId,
-          requestMessages,
-          abortControllerRef.current.signal
-        );
+      const runRequest = {
+        idempotencyKey,
+        ...(options.retainedUser?.serverId
+          ? { originMessageId: options.retainedUser.serverId }
+          : {}),
+        message: agentChatMessage(userMessage),
+        metadata: chatMessageMetadata(userMessage.parts)
+      };
+      let response: Response;
+      while (true) {
+        try {
+          response = await postAgentRun(
+            props.apiBaseUrl,
+            token,
+            modelSelection,
+            sessionId,
+            runRequest,
+            abortControllerRef.current.signal
+          );
+          if (response.status === 401) {
+            token = await props.ensureSession(true);
+            continue;
+          }
+          break;
+        } catch (caught) {
+          if (abortControllerRef.current.signal.aborted) throw caught;
+          await new Promise((resolve) => window.setTimeout(resolve, 250));
+        }
       }
 
       if (!response.ok) {
         throw new Error(await agentResponseErrorMessage(response));
       }
 
-      if (!response.body) {
-        throw new Error("The inference provider returned an empty response.");
-      }
-
-      await readAgentEventStream(response, (event) => {
-        if (event.type === "response-error") {
-          throw new Error(event.message);
+      const runId = response.headers.get("x-lush-run");
+      if (!runId) throw new Error("The agent did not return a run identifier.");
+      activeRunIdRef.current = runId;
+      if (stopRequestedRef.current) {
+        try {
+          await cancelAgentRun(props.apiBaseUrl, runId, token, {});
+        } catch (caught) {
+          if (!(caught instanceof ApiError) || caught.status !== 401) throw caught;
+          token = await props.ensureSession(true);
+          await cancelAgentRun(props.apiBaseUrl, runId, token, {});
         }
-        assistantParts = appendAgentStreamEvent(assistantParts, event);
-        updateAssistantMessage(assistantMessage.id, (message) => ({
-          ...message,
-          parts: assistantParts
-        }));
-      });
-      const assistantContent = chatMessageText({ parts: assistantParts });
+      }
+      let lastSequence = 0;
+      let runError: Error | undefined;
+      let assistantServerId: string | undefined;
+      const consume = async (stream: Response) => {
+        await readAgentRunEventStream(stream, (event) => {
+          if (event.sequence <= lastSequence) return;
+          lastSequence = event.sequence;
+          const payload = event.payload && typeof event.payload === "object"
+            ? event.payload as Record<string, unknown>
+            : {};
+          if (event.type === "run-start" && typeof payload.originMessageId === "string") {
+            setMessages((current) => current.map((message) =>
+              message.id === userMessage.id
+                ? { ...message, serverId: payload.originMessageId as string }
+                : message
+            ));
+          }
+          if (event.type === "response-error") {
+            runError = new Error(
+              typeof payload.message === "string" ? payload.message : "Agent run failed"
+            );
+            return;
+          }
+          if (event.type === "response-reset") {
+            assistantParts = [];
+            updateAssistantMessage(assistantMessage.id, (message) => ({
+              ...message,
+              parts: []
+            }));
+            return;
+          }
+          if (
+            event.type === "response-complete" &&
+            typeof payload.assistantMessageId === "string"
+          ) {
+            assistantServerId = payload.assistantMessageId;
+          }
+          if (event.type !== "text-delta" || typeof payload.delta !== "string") return;
+          assistantParts = appendAgentStreamEvent(assistantParts, {
+            type: "text-delta",
+            delta: payload.delta
+          });
+          updateAssistantMessage(assistantMessage.id, (message) => ({
+            ...message,
+            parts: assistantParts
+          }));
+        });
+      };
 
-      const assistantServerId = await props.onAppendSessionMessage(sessionId, {
-        role: "assistant",
-        content: assistantContent,
-        metadata: chatMessageMetadata(assistantParts)
-      });
+      while (true) {
+        try {
+          await consume(response);
+          if (runError) throw runError;
+          break;
+        } catch (caught) {
+          if (runError) throw runError;
+          if (abortControllerRef.current.signal.aborted) throw caught;
+          await new Promise((resolve) => window.setTimeout(resolve, 250));
+          response = await reconnectAgentRun(
+            props.apiBaseUrl,
+            token,
+            runId,
+            lastSequence,
+            abortControllerRef.current.signal
+          );
+          if (response.status === 401) {
+            token = await props.ensureSession(true);
+            response = await reconnectAgentRun(
+              props.apiBaseUrl,
+              token,
+              runId,
+              lastSequence,
+              abortControllerRef.current.signal
+            );
+          }
+          if (!response.ok) {
+            throw new Error(await agentResponseErrorMessage(response));
+          }
+        }
+      }
       updateAssistantMessage(assistantMessage.id, (message) => ({
         ...message,
         serverId: assistantServerId,
         status: "complete"
       }));
-
-      if (shouldGenerateSessionTitle && assistantContent.trim()) {
-        void generateAndPersistSessionTitle({
-          apiBaseUrl: props.apiBaseUrl,
-          sessionToken: token,
-          modelSelection,
-          userContent:
-            content || `Attached: ${attachments.map((item) => item.filename).join(", ")}`,
-          assistantContent,
-          sessionId,
-          ensureSession: props.ensureSession,
-          onSessionTitleChange: props.onSessionTitleChange
-        });
-      }
     } catch (caught) {
       if (caught instanceof DOMException && caught.name === "AbortError") {
-        let assistantServerId: string | undefined;
-        if (sessionId && chatMessageText({ parts: assistantParts }).trim()) {
-          assistantServerId = await props.onAppendSessionMessage(sessionId, {
-            role: "assistant",
-            content: chatMessageText({ parts: assistantParts }),
-            metadata: chatMessageMetadata(assistantParts)
-          }).catch(() => undefined);
-        }
         updateAssistantMessage(assistantMessage.id, (current) => ({
           ...current,
           parts: assistantParts,
-          serverId: assistantServerId,
           status: "complete"
         }));
       } else {
@@ -462,6 +498,8 @@ export function ChatPage(props: {
       }
     } finally {
       setIsStreaming(false);
+      activeRunIdRef.current = undefined;
+      stopRequestedRef.current = false;
       abortControllerRef.current = undefined;
     }
   };
@@ -595,7 +633,26 @@ export function ChatPage(props: {
   };
 
   const stop = () => {
-    abortControllerRef.current?.abort();
+    const runId = activeRunIdRef.current;
+    if (!runId) {
+      stopRequestedRef.current = true;
+      return;
+    }
+    stopRequestedRef.current = true;
+    void (async () => {
+      try {
+        let token = await props.ensureSession();
+        try {
+          await cancelAgentRun(props.apiBaseUrl, runId, token, {});
+        } catch (caught) {
+          if (!(caught instanceof ApiError) || caught.status !== 401) throw caught;
+          token = await props.ensureSession(true);
+          await cancelAgentRun(props.apiBaseUrl, runId, token, {});
+        }
+      } catch (caught) {
+        setError(caught instanceof Error ? caught.message : "Unable to cancel run");
+      }
+    })();
   };
 
   const cancelEdit = () => {

@@ -2027,6 +2027,208 @@
           "modelSelection",
           "messages"
         ]
+      },
+      "AgentRunStatus": {
+        "type": "string",
+        "enum": [
+          "queued",
+          "running",
+          "waiting_for_approval",
+          "needs_acknowledgment",
+          "completed",
+          "failed",
+          "cancelled"
+        ]
+      },
+      "CreateAgentRunRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Starts a durable agent run.",
+        "properties": {
+          "idempotencyKey": {
+            "type": "string",
+            "description": "Caller-stable key for exact start retries."
+          },
+          "originMessageId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Existing retained user message to reuse for a retried turn."
+          },
+          "modelSelection": {
+            "type": "string",
+            "description": "Pinned provider/model selection."
+          },
+          "message": {
+            "$ref": "#/components/schemas/AgentChatMessage"
+          },
+          "metadata": {
+            "description": "Persisted message metadata."
+          }
+        },
+        "required": [
+          "idempotencyKey",
+          "message"
+        ]
+      },
+      "AgentRun": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Durable managed-agent run state.",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "organizationId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "sessionId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "originMessageId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "assistantMessageId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "initiatedByUserId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "agentRevisionId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "environmentId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "status": {
+            "$ref": "#/components/schemas/AgentRunStatus"
+          },
+          "purpose": {
+            "type": "string",
+            "enum": [
+              "chat",
+              "title"
+            ]
+          },
+          "idempotencyKey": {
+            "type": "string"
+          },
+          "capabilityDigest": {
+            "type": "string"
+          },
+          "configurationDigest": {
+            "type": "string"
+          },
+          "isolationProvider": {
+            "type": "string"
+          },
+          "untrustedContentIngested": {
+            "type": "boolean"
+          },
+          "modelSelection": {
+            "type": "string"
+          },
+          "errorCode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "errorMessage": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "startedAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "completedAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cancelledAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "organizationId",
+          "sessionId",
+          "originMessageId",
+          "assistantMessageId",
+          "initiatedByUserId",
+          "agentRevisionId",
+          "environmentId",
+          "status",
+          "purpose",
+          "idempotencyKey",
+          "capabilityDigest",
+          "configurationDigest",
+          "isolationProvider",
+          "untrustedContentIngested",
+          "modelSelection",
+          "errorCode",
+          "errorMessage",
+          "createdAt",
+          "updatedAt",
+          "startedAt",
+          "completedAt",
+          "cancelledAt"
+        ]
       }
     }
   }

@@ -45,6 +45,22 @@ ${authHeaderLine}      accept: "text/event-stream"
   }
 
   if (route.kind === "stream") {
+    if (route.method === "GET" && route.id === "streamAgentRunEvents") {
+      return `export function ${route.id}(
+  apiBaseUrl: string,
+  ${leadingPathArguments}${authParameter}after = 0,
+  signal?: AbortSignal
+) {
+  const query = after > 0 ? \`?after=\${encodeURIComponent(String(after))}\` : "";
+  return fetch(\`\${apiUrl(apiBaseUrl, ${pathExpression})}\${query}\`, {
+    credentials: "include",
+    headers: {
+${authHeaderLine}    },
+    signal
+  });
+}
+`;
+    }
     return `export function ${route.id}(
   apiBaseUrl: string,
   ${leadingPathArguments}${authParameter}body: ${route.requestType},

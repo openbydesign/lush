@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { ToolResult } from "../services/tools/src/connectors/types";
+import { coalesceBrokerDeltas } from "../services/agent/src/harness/harnesses";
 import {
   ConversationBusyError,
   AmbiguousToolOutcomeError,
@@ -51,6 +52,21 @@ describe("event log", () => {
     });
     expect([s1, s2, other]).toEqual([1, 2, 1]);
     expect((await log.events("c1")).map((e) => e.step)).toEqual([1, 2]);
+  });
+});
+
+describe("brokered Lush harness", () => {
+  test("emits the first delta immediately and coalesces a burst", async () => {
+    async function* burst() {
+      yield "first";
+      yield " ";
+      yield "second";
+      yield " ";
+      yield "third";
+    }
+    const deltas: string[] = [];
+    for await (const delta of coalesceBrokerDeltas(burst())) deltas.push(delta);
+    expect(deltas).toEqual(["first", " second third"]);
   });
 });
 

@@ -57,3 +57,17 @@ test(
     timeout: 60_000
   }
 );
+
+test("generated durable-run reconnects use a cursor-only GET request", async () => {
+  const generated = await Bun.file("packages/api-client/src/generated.ts").text();
+  const start = generated.indexOf("export function streamAgentRunEvents(");
+  const end = generated.indexOf("\nexport ", start + 1);
+  const reconnect = generated.slice(start, end);
+
+  expect(start).toBeGreaterThan(-1);
+  expect(reconnect).toContain("after = 0");
+  expect(reconnect).toContain("?after=");
+  expect(reconnect).not.toContain('method: "GET"');
+  expect(reconnect).not.toContain('"content-type"');
+  expect(reconnect).not.toContain("body:");
+});

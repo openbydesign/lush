@@ -12,8 +12,8 @@ type Operation = {
   security?: Array<Record<string, string[]>>;
   parameters?: Array<{
     name: string;
-    in: "path";
-    required: true;
+    in: "path" | "query";
+    required: boolean;
     description?: string;
     schema: JsonSchema;
   }>;
@@ -510,7 +510,49 @@ const schemas: Record<string, JsonSchema> = {
       arraySchema(ref("AgentChatMessage")),
       "Conversation messages to send to the agent."
     )
-  }, ["modelSelection", "messages"], "Streaming prompt request for one-off agent operations.")
+  }, ["modelSelection", "messages"], "Streaming prompt request for one-off agent operations."),
+  AgentRunStatus: enumSchema([
+    "queued", "running", "waiting_for_approval", "needs_acknowledgment",
+    "completed", "failed", "cancelled"
+  ]),
+  CreateAgentRunRequest: objectSchema({
+    idempotencyKey: describeSchema(stringSchema(), "Caller-stable key for exact start retries."),
+    originMessageId: describeSchema(stringSchema("uuid"), "Existing retained user message to reuse for a retried turn."),
+    modelSelection: describeSchema(stringSchema(), "Pinned provider/model selection."),
+    message: ref("AgentChatMessage"),
+    metadata: describeSchema({}, "Persisted message metadata.")
+  }, ["idempotencyKey", "message"], "Starts a durable agent run."),
+  AgentRun: objectSchema({
+    id: stringSchema("uuid"),
+    organizationId: stringSchema("uuid"),
+    sessionId: stringSchema("uuid"),
+    originMessageId: stringSchema("uuid"),
+    assistantMessageId: nullableSchema(stringSchema("uuid")),
+    initiatedByUserId: stringSchema("uuid"),
+    agentRevisionId: stringSchema("uuid"),
+    environmentId: stringSchema("uuid"),
+    status: ref("AgentRunStatus"),
+    purpose: enumSchema(["chat", "title"]),
+    idempotencyKey: stringSchema(),
+    capabilityDigest: stringSchema(),
+    configurationDigest: stringSchema(),
+    isolationProvider: stringSchema(),
+    untrustedContentIngested: { type: "boolean" },
+    modelSelection: stringSchema(),
+    errorCode: nullableSchema(stringSchema()),
+    errorMessage: nullableSchema(stringSchema()),
+    createdAt: stringSchema("date-time"),
+    updatedAt: stringSchema("date-time"),
+    startedAt: nullableSchema(stringSchema("date-time")),
+    completedAt: nullableSchema(stringSchema("date-time")),
+    cancelledAt: nullableSchema(stringSchema("date-time"))
+  }, [
+    "id", "organizationId", "sessionId", "originMessageId", "assistantMessageId",
+    "initiatedByUserId", "agentRevisionId", "environmentId", "status", "purpose",
+    "idempotencyKey", "capabilityDigest", "configurationDigest", "isolationProvider",
+    "untrustedContentIngested", "modelSelection", "errorCode", "errorMessage",
+    "createdAt", "updatedAt", "startedAt", "completedAt", "cancelledAt"
+  ], "Durable managed-agent run state.")
 };
 
 const operationDocs: Record<
@@ -827,6 +869,31 @@ const operationDocs: Record<
     requestDescription: "Session-state settings to update.",
     successDescription: "Updated session-state settings."
   },
+  createAgentRun: {
+    summary: "Start agent run",
+    description:
+      "Atomically persists the user turn and immutable run configuration, then streams replayable run events. Reusing an idempotency key with the exact request attaches to the same run.",
+    requestDescription: "User turn, model selection, and caller-stable idempotency key.",
+    successDescription: "Newline-delimited durable run events."
+  },
+  fetchAgentRun: {
+    summary: "Get agent run",
+    description: "Returns an owned durable run and its terminal or active state.",
+    successDescription: "Agent run state."
+  },
+  streamAgentRunEvents: {
+    summary: "Resume agent run events",
+    description:
+      "Streams persisted run events in sequence order. The optional `after` query parameter resumes after a previously observed sequence.",
+    successDescription: "Newline-delimited durable run events."
+  },
+  cancelAgentRun: {
+    summary: "Cancel agent run",
+    description:
+      "Durably cancels an owned run, revokes its inference capability, and persists any already-streamed partial answer.",
+    requestDescription: "Empty JSON body.",
+    successDescription: "Cancelled or already-terminal agent run."
+  },
   streamAgentChat: {
     summary: "Stream agent chat",
     description:
@@ -845,12 +912,13 @@ const operationDocs: Record<
 
 const pathParameterDescriptions: Record<string, string> = {
   agentSlug: "Unique agent slug, such as `lush` for the built-in agent.",
-  sessionId: "Session identifier."
+  sessionId: "Session identifier.",
+  runId: "Agent run identifier."
 };
 
 const fullDocument = createOpenApiDocument("Lush API", apiSpec.routes);
 const groupedDocuments = Object.fromEntries(
-  ["auth", "inference", "sessions", "agents", "health"].map((group) => [
+  ["auth", "inference", "sessions", "runs", "agents", "health"].map((group) => [
     group,
     createOpenApiDocument(
       `${titleCase(group)} API`,
@@ -913,7 +981,7 @@ function createOpenApiDocument(
       operationId: route.id,
       tags: [forcedTag ?? routeGroup(route.path)],
       ...(route.auth ? { security: [{ bearerAuth: [] }] } : {}),
-      ...pathParameters(route.path),
+      ...operationParameters(route.path, route.id),
       ...requestBody(route),
       responses: responses(route)
     };
@@ -990,21 +1058,29 @@ function requestBody(route: (typeof apiSpec.routes)[number]) {
   };
 }
 
-function pathParameters(path: string) {
+function operationParameters(path: string, routeId: string) {
   const params = Array.from(path.matchAll(/:([A-Za-z0-9_]+)/g), (match) => match[1]);
-  if (params.length === 0) {
+  const parameters: NonNullable<Operation["parameters"]> = params.map((name) => ({
+    name,
+    in: "path" as const,
+    required: true,
+    description: pathParameterDescriptions[name],
+    schema: stringSchema()
+  }));
+  if (routeId === "streamAgentRunEvents") {
+    parameters.push({
+      name: "after",
+      in: "query",
+      required: false,
+      description: "Resume after this last-observed event sequence.",
+      schema: { type: "integer", minimum: 0 }
+    });
+  }
+  if (parameters.length === 0) {
     return {};
   }
 
-  return {
-    parameters: params.map((name) => ({
-      name,
-      in: "path" as const,
-      required: true as const,
-      description: pathParameterDescriptions[name],
-      schema: stringSchema()
-    }))
-  };
+  return { parameters };
 }
 
 function responses(route: (typeof apiSpec.routes)[number]): Operation["responses"] {
@@ -1017,7 +1093,9 @@ function responses(route: (typeof apiSpec.routes)[number]): Operation["responses
           "application/x-ndjson": {
             schema: describeSchema(
               stringSchema(),
-              "Newline-delimited AgentStreamEvent JSON objects."
+              route.id === "createAgentRun" || route.id === "streamAgentRunEvents"
+                ? "Newline-delimited AgentRunEvent JSON objects."
+                : "Newline-delimited AgentStreamEvent JSON objects."
             )
           }
         }

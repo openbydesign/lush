@@ -19,6 +19,20 @@ import {
   encodeAgentStreamEvent
 } from "@lush/agent/stream-protocol";
 import {
+  AgentRunError,
+  cancelAgentRun,
+  createAgentRun,
+  fetchAgentRun
+} from "@lush/agent/runs";
+import {
+  exposedAgentRunHeaders,
+  streamDurableRun
+} from "@lush/agent/run-stream";
+import {
+  scheduleAgentRunExecution,
+  startAgentRunRecoveryLoop
+} from "@lush/agent/run-executor";
+import {
   AuthError,
   type AuthzAction,
   authorizePrincipal,
@@ -298,6 +312,7 @@ app.use(
   cors({
     origin: allowedOrigins,
     allowHeaders: ["authorization", "content-type"],
+    exposeHeaders: exposedAgentRunHeaders,
     allowMethods: ["GET", "POST", "PATCH", "OPTIONS"],
     credentials: true,
     maxAge: 86400
@@ -331,6 +346,10 @@ function routePath(id: ApiRouteId) {
 
 function sessionIdParam(c: Context) {
   return c.req.param("sessionId") ?? "";
+}
+
+function runIdParam(c: Context) {
+  return c.req.param("runId") ?? "";
 }
 
 function projectIdParam(c: Context) {
@@ -1414,6 +1433,64 @@ app.post(routePath("archiveSession"), async (c) => {
   }
 });
 
+app.post(routePath("createAgentRun"), async (c) => {
+  const authorized = await authenticateAuthorized(c, "createAgentRun");
+  if ("response" in authorized) return authorized.response;
+  const principal = organizationPrincipal(authorized.auth.principal);
+  if (!principal) return organizationRequired(c);
+
+  try {
+    const body = await c.req.json().catch(() => undefined);
+    const { run } = await createAgentRun(principal, sessionIdParam(c), body);
+    void scheduleAgentRunExecution(run.id);
+    return streamDurableRun(principal, run.id, c.req.raw, 0);
+  } catch (error) {
+    return handleAgentRunError(c, error, "Unable to create agent run");
+  }
+});
+
+app.get(routePath("fetchAgentRun"), async (c) => {
+  const authorized = await authenticateAuthorized(c, "fetchAgentRun");
+  if ("response" in authorized) return authorized.response;
+  const principal = organizationPrincipal(authorized.auth.principal);
+  if (!principal) return organizationRequired(c);
+
+  try {
+    return c.json(await fetchAgentRun(principal, runIdParam(c)));
+  } catch (error) {
+    return handleAgentRunError(c, error, "Unable to load agent run");
+  }
+});
+
+app.get(routePath("streamAgentRunEvents"), async (c) => {
+  const authorized = await authenticateAuthorized(c, "streamAgentRunEvents");
+  if ("response" in authorized) return authorized.response;
+  const principal = organizationPrincipal(authorized.auth.principal);
+  if (!principal) return organizationRequired(c);
+
+  try {
+    const runId = runIdParam(c);
+    await fetchAgentRun(principal, runId);
+    const after = normalizeEventSequence(c.req.query("after"));
+    return streamDurableRun(principal, runId, c.req.raw, after);
+  } catch (error) {
+    return handleAgentRunError(c, error, "Unable to stream agent run");
+  }
+});
+
+app.post(routePath("cancelAgentRun"), async (c) => {
+  const authorized = await authenticateAuthorized(c, "cancelAgentRun");
+  if ("response" in authorized) return authorized.response;
+  const principal = organizationPrincipal(authorized.auth.principal);
+  if (!principal) return organizationRequired(c);
+
+  try {
+    return c.json(await cancelAgentRun(principal, runIdParam(c)));
+  } catch (error) {
+    return handleAgentRunError(c, error, "Unable to cancel agent run");
+  }
+});
+
 app.post(routePath("streamAgentChat"), async (c) => {
   const authorized = await authenticateAuthorized(c, "streamAgentChat");
   if ("response" in authorized) {
@@ -1515,7 +1592,18 @@ logger.info(
   "api listening"
 );
 
+startAgentRunRecoveryLoop();
+
 export type AppType = typeof app;
+
+function normalizeEventSequence(value: string | undefined) {
+  if (!value) return 0;
+  const sequence = Number(value);
+  if (!Number.isSafeInteger(sequence) || sequence < 0) {
+    throw new AgentRunError("invalid_event_sequence", "Event sequence is invalid");
+  }
+  return sequence;
+}
 
 function streamClientEvents(request: Request, principal: Principal) {
   const encoder = new TextEncoder();
@@ -1992,6 +2080,22 @@ function handleSessionStateError(
     { error: "session_state_failed", message: fallbackMessage },
     400
   );
+}
+
+function handleAgentRunError(
+  c: Context,
+  error: unknown,
+  fallbackMessage: string
+) {
+  if (error instanceof AgentRunError) {
+    return c.json(
+      { error: error.code, message: error.message },
+      contentfulStatus(error.status)
+    );
+  }
+
+  logger.error({ err: error }, fallbackMessage);
+  return c.json({ error: "agent_run_failed", message: fallbackMessage }, 500);
 }
 
 function handleToolError(
