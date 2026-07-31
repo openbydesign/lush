@@ -1,3 +1,4 @@
+import { timingSafeEqual } from "node:crypto";
 import { getDb } from "@lush/db/client";
 import type { AgentRunRow, Database } from "@lush/db/schema";
 import { createLogger } from "@lush/logging/logger";
@@ -22,6 +23,7 @@ import { streamLushAgentChat } from "./runtime";
 const logger = createLogger("@lush/agent-runs");
 const leaseMs = 150_000;
 const leaseRenewMs = 30_000;
+const authorizationPollMs = 250;
 const executions = new Map<string, Promise<void>>();
 const inFlight = new InFlightRegistry();
 type LocalBroker = { port: number; stop(closeActiveConnections?: boolean): void };
@@ -29,6 +31,7 @@ type LocalBroker = { port: number; stop(closeActiveConnections?: boolean): void 
 type ClaimedRun = {
   run: AgentRunRow;
   leaseOwner: string;
+  nextSequence: number;
   recovery: "new" | "resume" | "completed" | "failed" | "canceled";
 };
 
@@ -146,17 +149,16 @@ export async function executeAgentRun(runId: string): Promise<void> {
       signal: controller.signal,
       execId: claimed.run.id
     })) {
-      await assertLease(claimed);
       for (const message of frame.outputs) {
         if (message.role === "assistant" && message.content.type === "text") {
           const firstToken = assistantText.length === 0;
-          assistantText += message.content.text;
           await appendPublicEvent(claimed, "text-delta", {
             delta: message.content.text,
             ...(firstToken
               ? { firstTokenMs: Date.now() - new Date(claimed.run.createdAt).getTime() }
               : {})
           });
+          assistantText += message.content.text;
           if (firstToken) {
             logger.info({
               runId,
@@ -198,17 +200,7 @@ class PostgresRunEventLog implements EventLog {
   constructor(private readonly claimed: ClaimedRun) {}
 
   async append(event: Omit<ConversationEvent, "step">): Promise<number> {
-    await assertLease(this.claimed);
-    return getDb().transaction().execute((trx) =>
-      appendRunEvent(
-        trx,
-        this.claimed.run,
-        "conversation",
-        event,
-        new Date(),
-        this.claimed.leaseOwner
-      )
-    );
+    return appendClaimedEvent(this.claimed, "conversation", event);
   }
 
   async events(): Promise<ConversationEvent[]> {
@@ -288,11 +280,11 @@ async function claimRun(runId: string): Promise<ClaimedRun | null> {
       startedAt: run.startedAt ?? now,
       updatedAt: now
     }).where("id", "=", run.id).returningAll().executeTakeFirstOrThrow();
-    await appendRunEvent(trx, updated, "run-status", {
+    const sequence = await appendRunEvent(trx, updated, "run-status", {
       status: "running",
       recovered: recovering
     }, now);
-    return { run: updated, leaseOwner, recovery };
+    return { run: updated, leaseOwner, recovery, nextSequence: sequence + 1 };
   });
 }
 
@@ -329,7 +321,10 @@ function startInferenceBroker(
       if (
         request.method !== "POST" ||
         new URL(request.url).pathname !== "/inference" ||
-        request.headers.get("authorization") !== `Bearer ${capabilityToken}`
+        !constantTimeEqual(
+          request.headers.get("authorization") ?? "",
+          `Bearer ${capabilityToken}`
+        )
       ) {
         return new Response(null, { status: 403 });
       }
@@ -347,7 +342,13 @@ function startInferenceBroker(
       }
 
       const configuration = parseRunConfiguration(body.configuration);
-      const signal = AbortSignal.any([request.signal, executionSignal]);
+      const revoked = new AbortController();
+      const signal = AbortSignal.any([request.signal, executionSignal, revoked.signal]);
+      const stopAuthorizationMonitor = monitorInferenceAuthorization(
+        claimed,
+        revoked,
+        signal
+      );
       const generator = streamLushAgentChat({
         organizationId: claimed.run.organizationId,
         instructions: configuration.agent.instructions,
@@ -361,18 +362,18 @@ function startInferenceBroker(
         async start(controller) {
           try {
             for await (const delta of generator) {
-              if (!(await isInferenceAuthorized(claimed))) {
-                throw new Error("Run authorization was revoked");
-              }
               controller.enqueue(encoder.encode(`${JSON.stringify({ delta })}\n`));
             }
             controller.close();
           } catch (error) {
             controller.error(error);
+          } finally {
+            stopAuthorizationMonitor();
           }
         },
         cancel() {
-          // Request cancellation propagates through request.signal.
+          stopAuthorizationMonitor();
+          revoked.abort();
         }
       }), {
         headers: {
@@ -382,6 +383,13 @@ function startInferenceBroker(
       });
     }
   }) as unknown as LocalBroker;
+}
+
+function constantTimeEqual(actual: string, expected: string) {
+  const actualBytes = Buffer.from(actual);
+  const expectedBytes = Buffer.from(expected);
+  return actualBytes.length === expectedBytes.length &&
+    timingSafeEqual(actualBytes, expectedBytes);
 }
 
 async function isInferenceAuthorized(claimed: ClaimedRun) {
@@ -399,6 +407,44 @@ async function isInferenceAuthorized(claimed: ClaimedRun) {
   return Boolean(row);
 }
 
+function monitorInferenceAuthorization(
+  claimed: ClaimedRun,
+  revoked: AbortController,
+  executionSignal: AbortSignal
+) {
+  const stopped = new AbortController();
+  const signal = AbortSignal.any([executionSignal, stopped.signal]);
+  void (async () => {
+    while (!signal.aborted) {
+      await abortableDelay(signal, authorizationPollMs);
+      if (signal.aborted) return;
+      if (!(await isInferenceAuthorized(claimed)) && !signal.aborted) {
+        revoked.abort(new Error("Run authorization was revoked"));
+        return;
+      }
+    }
+  })().catch((error) => {
+    if (!signal.aborted) revoked.abort(error);
+  });
+  return () => stopped.abort();
+}
+
+function abortableDelay(signal: AbortSignal, milliseconds: number) {
+  return new Promise<void>((resolve) => {
+    if (signal.aborted) return resolve();
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      signal.removeEventListener("abort", finish);
+      resolve();
+    };
+    const timer = setTimeout(finish, milliseconds);
+    signal.addEventListener("abort", finish, { once: true });
+  });
+}
+
 async function markEnvironmentRunning(claimed: ClaimedRun, backendHandle: string) {
   await getDb().transaction().execute(async (trx) => {
     await requireLeaseForUpdate(trx, claimed);
@@ -412,17 +458,28 @@ async function markEnvironmentRunning(claimed: ClaimedRun, backendHandle: string
 }
 
 async function appendPublicEvent(claimed: ClaimedRun, type: string, payload: unknown) {
-  await assertLease(claimed);
-  return getDb().transaction().execute((trx) =>
+  return appendClaimedEvent(claimed, type, payload);
+}
+
+async function appendClaimedEvent(
+  claimed: ClaimedRun,
+  type: string,
+  payload: unknown
+) {
+  const sequence = claimed.nextSequence;
+  const appended = await getDb().transaction().execute((trx) =>
     appendRunEvent(
       trx,
       claimed.run,
       type,
       payload,
       new Date(),
-      claimed.leaseOwner
+      claimed.leaseOwner,
+      sequence
     )
   );
+  claimed.nextSequence = appended + 1;
+  return appended;
 }
 
 async function completeRun(claimed: ClaimedRun, assistantText: string) {

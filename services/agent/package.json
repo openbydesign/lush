@@ -30,6 +30,7 @@
     "./message-merge": "./src/message-merge.ts",
     "./runtime": "./src/runtime.ts",
     "./run-executor": "./src/run-executor.ts",
+    "./run-stream": "./src/run-stream.ts",
     "./runs": "./src/runs.ts",
     "./session-context": "./src/session-context.ts",
     "./stream-protocol": "./src/stream-protocol.ts",

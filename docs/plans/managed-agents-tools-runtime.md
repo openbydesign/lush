@@ -1406,7 +1406,13 @@ before the relevant phase:
    warm-attach within budget — is fixed (see Default chat once tools are
    enabled); the numbers are benchmark-driven.
 8. The retention split between transcripts, run event logs, tool payloads,
-   artifacts, audit events, and derived memories.
+   artifacts, audit events, and derived memories. Phase 1 snapshots the full
+   effective transcript and project context into each run configuration for
+   replay and explainability. That makes session storage grow quadratically and
+   means supersession or truncation is not erasure from historical runs. Treat
+   this as a temporary retention choice: before Phase 3, replace full snapshots
+   with immutable message/context references plus digests, or define bounded
+   run-configuration retention and explicit erasure semantics.
 
 ## Protocol references
 

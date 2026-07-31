@@ -2,7 +2,8 @@ import { sql } from "kysely";
 import {
   builtinLushAgentId,
   builtinLushRevisionDigest,
-  builtinLushRevisionId
+  builtinLushRevisionId,
+  builtinLushRevisionInstructions
 } from "../schema";
 import type { Migration } from "./types";
 
@@ -107,7 +108,7 @@ export const agentRuns: Migration = {
         ${builtinLushRevisionId}::uuid,
         ${builtinLushAgentId}::uuid,
         1,
-        ${`You are Lush, a concise and practical AI agent inside the Lush app.\n\nAnswer directly, ask clarifying questions when needed, and avoid claiming tool\naccess until tools are explicitly connected.\n`},
+        ${builtinLushRevisionInstructions},
         '{"workspaceMode":"chat"}'::jsonb,
         'chat',
         '{"wallClockMs":120000,"maxOutputBytes":8000000}'::jsonb,
@@ -307,9 +308,23 @@ export const agentRuns: Migration = {
     `.execute(db);
 
     await sql`
+      update tool_calls tc
+      set run_id = null
+      where run_id is not null
+        and not exists (select 1 from agent_runs ar where ar.id = tc.run_id)
+    `.execute(db);
+    await sql`
+      alter table tool_calls
+      drop constraint if exists tool_calls_run_id_fkey
+    `.execute(db);
+    await sql`
       alter table tool_calls
       add constraint tool_calls_run_id_fkey
       foreign key (run_id) references agent_runs(id) on delete set null
+      not valid
+    `.execute(db);
+    await sql`
+      alter table tool_calls validate constraint tool_calls_run_id_fkey
     `.execute(db);
     await sql`
       alter table tool_calls drop constraint if exists tool_calls_status_check
@@ -321,9 +336,23 @@ export const agentRuns: Migration = {
                         'cancelled'))
     `.execute(db);
     await sql`
+      update tool_approvals ta
+      set run_id = null
+      where run_id is not null
+        and not exists (select 1 from agent_runs ar where ar.id = ta.run_id)
+    `.execute(db);
+    await sql`
+      alter table tool_approvals
+      drop constraint if exists tool_approvals_run_id_fkey
+    `.execute(db);
+    await sql`
       alter table tool_approvals
       add constraint tool_approvals_run_id_fkey
       foreign key (run_id) references agent_runs(id) on delete set null
+      not valid
+    `.execute(db);
+    await sql`
+      alter table tool_approvals validate constraint tool_approvals_run_id_fkey
     `.execute(db);
   }
 };

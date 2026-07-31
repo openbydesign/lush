@@ -9,6 +9,10 @@ import type {
 /** Stable identities for the built-in Lush agent's first immutable revision. */
 export const builtinLushAgentId = "00000000-0000-4000-8000-000000000101";
 export const builtinLushRevisionId = "00000000-0000-4000-8000-000000000102";
+export const builtinLushRevisionInstructions =
+  "You are Lush, a concise and practical AI agent inside the Lush app.\n\n" +
+  "Answer directly, ask clarifying questions when needed, and avoid claiming tool\n" +
+  "access until tools are explicitly connected.\n";
 export const builtinLushRevisionDigest =
   "9370875a1a258a08f7167fa64ec72e256179bbcbaea1e8431394f4ab26b4c103";
 

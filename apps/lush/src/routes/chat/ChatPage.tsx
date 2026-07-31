@@ -455,6 +455,7 @@ export function ChatPage(props: {
             props.apiBaseUrl,
             token,
             runId,
+            lastSequence,
             abortControllerRef.current.signal
           );
           if (response.status === 401) {
@@ -463,6 +464,7 @@ export function ChatPage(props: {
               props.apiBaseUrl,
               token,
               runId,
+              lastSequence,
               abortControllerRef.current.signal
             );
           }

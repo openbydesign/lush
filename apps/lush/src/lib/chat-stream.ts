@@ -79,13 +79,14 @@ export function reconnectAgentRun(
   apiBaseUrl: string,
   sessionToken: string | undefined,
   runId: string,
+  after: number,
   signal: AbortSignal
 ) {
   return streamAgentRunEvents(
     apiBaseUrl,
     runId,
     sessionToken,
-    undefined,
+    after,
     signal
   );
 }

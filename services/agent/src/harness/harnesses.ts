@@ -38,10 +38,17 @@ type BrokeredLushConfig = {
   configuration: unknown;
 };
 
+const deltaFlushMs = 50;
+const deltaFlushBytes = 1024;
+
 /**
  * Phase 1's built-in Lush harness. The child owns the turn and receives an
  * immutable run bundle plus one short-lived, run-bound inference capability;
  * it never receives an upstream provider credential.
+ *
+ * TODO(Phase 3): replace this loopback-only endpoint and opaque token with the
+ * isolation-provider-reachable broker and signed expiring audience-bound token
+ * defined by the broker-token plan. This Phase 1 transport is not that contract.
  */
 export function brokeredLushHarness(id = "lush-brokered"): Harness {
   return {
@@ -64,32 +71,11 @@ export function brokeredLushHarness(id = "lush-brokered"): Harness {
         throw new Error(`Inference broker rejected the run (${response.status})`);
       }
 
-      const decoder = new TextDecoder();
-      let buffer = "";
-      for await (const chunk of response.body as AsyncIterable<Uint8Array>) {
-        buffer += decoder.decode(chunk, { stream: true });
-        let newline = buffer.indexOf("\n");
-        while (newline >= 0) {
-          const line = buffer.slice(0, newline).trim();
-          buffer = buffer.slice(newline + 1);
-          if (line) {
-            const delta = parseBrokerDelta(line);
-            if (delta) {
-              yield {
-                type: "outputs",
-                messages: [textMessage("assistant", delta)]
-              };
-            }
-          }
-          newline = buffer.indexOf("\n");
-        }
-      }
-      const tail = buffer.trim();
-      if (tail) {
-        const delta = parseBrokerDelta(tail);
-        if (delta) {
-          yield { type: "outputs", messages: [textMessage("assistant", delta)] };
-        }
+      for await (const delta of coalesceBrokerDeltas(readBrokerDeltas(response.body))) {
+        yield {
+          type: "outputs",
+          messages: [textMessage("assistant", delta)]
+        };
       }
       yield { type: "end", state: "completed" };
     }
@@ -112,6 +98,82 @@ function normalizeBrokeredConfig(value: unknown): BrokeredLushConfig {
     throw new Error("Brokered Lush harness configuration is invalid");
   }
   return candidate as BrokeredLushConfig;
+}
+
+async function* readBrokerDeltas(body: ReadableStream<Uint8Array>) {
+  const decoder = new TextDecoder();
+  let buffer = "";
+  for await (const chunk of body as AsyncIterable<Uint8Array>) {
+    buffer += decoder.decode(chunk, { stream: true });
+    let newline = buffer.indexOf("\n");
+    while (newline >= 0) {
+      const line = buffer.slice(0, newline).trim();
+      buffer = buffer.slice(newline + 1);
+      if (line) yield parseBrokerDelta(line);
+      newline = buffer.indexOf("\n");
+    }
+  }
+  buffer += decoder.decode();
+  const tail = buffer.trim();
+  if (tail) yield parseBrokerDelta(tail);
+}
+
+export async function* coalesceBrokerDeltas(source: AsyncIterable<string>) {
+  const iterator = source[Symbol.asyncIterator]();
+  const encoder = new TextEncoder();
+  let next = iterator.next();
+  let pending = "";
+  let flushDeadline = 0;
+  let emittedFirst = false;
+
+  while (true) {
+    const result = pending
+      ? await nextWithTimeout(next, Math.max(0, flushDeadline - Date.now()))
+      : { kind: "next" as const, value: await next };
+    if (result.kind === "timeout") {
+      yield pending;
+      pending = "";
+      flushDeadline = 0;
+      continue;
+    }
+    if (result.value.done) {
+      if (pending) yield pending;
+      return;
+    }
+
+    next = iterator.next();
+    if (!emittedFirst) {
+      emittedFirst = true;
+      yield result.value.value;
+      continue;
+    }
+    if (!pending) flushDeadline = Date.now() + deltaFlushMs;
+    pending += result.value.value;
+    if (encoder.encode(pending).byteLength >= deltaFlushBytes) {
+      yield pending;
+      pending = "";
+      flushDeadline = 0;
+    }
+  }
+}
+
+function nextWithTimeout<T>(next: Promise<IteratorResult<T>>, milliseconds: number) {
+  return new Promise<
+    | { kind: "next"; value: IteratorResult<T> }
+    | { kind: "timeout" }
+  >((resolve, reject) => {
+    const timer = setTimeout(() => resolve({ kind: "timeout" }), milliseconds);
+    next.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve({ kind: "next", value });
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      }
+    );
+  });
 }
 
 function parseBrokerDelta(line: string): string {

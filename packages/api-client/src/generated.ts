@@ -2274,17 +2274,15 @@ export async function fetchAgentRun(
 export function streamAgentRunEvents(
   apiBaseUrl: string,
   runId: string,
-  sessionToken: string | undefined, body: undefined,
+  sessionToken: string | undefined, after = 0,
   signal?: AbortSignal
 ) {
-  return fetch(apiUrl(apiBaseUrl, routePath(STREAM_AGENT_RUN_EVENTS_ROUTE.path, { runId })), {
-    method: "GET",
+  const query = after > 0 ? `?after=${encodeURIComponent(String(after))}` : "";
+  return fetch(`${apiUrl(apiBaseUrl, routePath(STREAM_AGENT_RUN_EVENTS_ROUTE.path, { runId }))}${query}`, {
     credentials: "include",
     headers: {
       ...authorizationHeaders(sessionToken),
-      "content-type": "application/json"
     },
-    body: JSON.stringify(body),
     signal
   });
 }

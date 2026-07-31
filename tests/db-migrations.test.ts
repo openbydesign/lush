@@ -1,5 +1,10 @@
 import { expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { migrations } from "../packages/db/src/migrations";
+import {
+  builtinLushRevisionDigest,
+  builtinLushRevisionInstructions
+} from "../packages/db/src/schema";
 
 test("database migrations are registered in id order with unique ids", () => {
   const ids = migrations.map((migration) => migration.id);
@@ -39,6 +44,15 @@ test("durable agent runs are append-only, scoped, and resumable", async () => {
   expect(migration).toContain("configuration_digest text not null");
   expect(migration).toContain("agent_run_capabilities");
   expect(migration).toContain("agent_run_artifacts");
+  expect(migration).toContain("drop constraint if exists tool_calls_run_id_fkey");
+  expect(migration).toContain("drop constraint if exists tool_approvals_run_id_fkey");
+  expect(migration).toContain("validate constraint tool_calls_run_id_fkey");
+  expect(migration).toContain("validate constraint tool_approvals_run_id_fkey");
+});
+
+test("the built-in Lush revision digest matches its immutable instructions", () => {
+  expect(createHash("sha256").update(builtinLushRevisionInstructions).digest("hex"))
+    .toBe(builtinLushRevisionDigest);
 });
 
 test("model capabilities are added append-only as structured JSON", async () => {

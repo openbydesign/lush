@@ -299,6 +299,8 @@ export async function createAgentRun(
         imageDigest: `builtin:lush@${builtinLushRevisionDigest}`,
         limits: runLimits,
         leaseExpiresAt: null,
+        // Phase 1 subprocesses retain no backend state after destruction, so
+        // their environment records are immediately eligible for reclamation.
         retentionUntil: now,
         createdAt: now,
         updatedAt: now,
@@ -521,7 +523,8 @@ export async function appendRunEvent(
   type: string,
   payload: unknown,
   createdAt = new Date(),
-  expectedLeaseOwner?: string
+  expectedLeaseOwner?: string,
+  expectedSequence?: number
 ) {
   const locked = await trx.selectFrom("agentRuns")
     .select(["id", "status", "leaseOwner"])
@@ -533,10 +536,11 @@ export async function appendRunEvent(
   ) {
     throw new AgentRunError("run_lease_lost", "Run execution lease was lost", 409);
   }
-  const last = await trx.selectFrom("agentRunEvents")
+  const sequence = expectedSequence ?? Number((await trx
+    .selectFrom("agentRunEvents")
     .select((eb) => eb.fn.max<number>("sequence").as("sequence"))
-    .where("runId", "=", run.id).executeTakeFirst();
-  const sequence = Number(last?.sequence ?? 0) + 1;
+    .where("runId", "=", run.id)
+    .executeTakeFirst())?.sequence ?? 0) + 1;
   await trx.insertInto("agentRunEvents").values({
     runId: run.id,
     organizationId: run.organizationId,

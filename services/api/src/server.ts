@@ -22,10 +22,9 @@ import {
   AgentRunError,
   cancelAgentRun,
   createAgentRun,
-  fetchAgentRun,
-  isTerminalRunStatus,
-  listAgentRunEvents
+  fetchAgentRun
 } from "@lush/agent/runs";
+import { streamDurableRun } from "@lush/agent/run-stream";
 import {
   scheduleAgentRunExecution,
   startAgentRunRecoveryLoop
@@ -1592,71 +1591,6 @@ logger.info(
 startAgentRunRecoveryLoop();
 
 export type AppType = typeof app;
-
-function streamDurableRun(
-  principal: OrganizationPrincipal,
-  runId: string,
-  request: Request,
-  after: number
-) {
-  const encoder = new TextEncoder();
-  let closed = false;
-  const stream = new ReadableStream<Uint8Array>({
-    async start(controller) {
-      let cursor = after;
-      let lastHeartbeat = Date.now();
-      try {
-        while (!request.signal.aborted) {
-          const events = await listAgentRunEvents(principal, runId, cursor);
-          for (const event of events) {
-            cursor = event.sequence;
-            controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`));
-          }
-          const run = await fetchAgentRun(principal, runId);
-          if (isTerminalRunStatus(run.status) && events.length === 0) break;
-          if (Date.now() - lastHeartbeat >= 15_000) {
-            controller.enqueue(encoder.encode("\n"));
-            lastHeartbeat = Date.now();
-          }
-          await waitForRunPoll(request.signal, 100);
-        }
-        if (!closed) {
-          closed = true;
-          controller.close();
-        }
-      } catch (error) {
-        if (!closed) {
-          closed = true;
-          controller.error(error);
-        }
-      }
-    },
-    cancel() {
-      // Disconnecting detaches only this subscriber. The durable run continues
-      // until its terminal state or an explicit authenticated cancel request.
-      closed = true;
-    }
-  });
-  return new Response(stream, {
-    headers: {
-      "content-type": agentStreamContentType,
-      "cache-control": "no-cache, no-transform",
-      "x-accel-buffering": "no",
-      "x-lush-run": runId
-    }
-  });
-}
-
-function waitForRunPoll(signal: AbortSignal, milliseconds: number) {
-  return new Promise<void>((resolve) => {
-    if (signal.aborted) return resolve();
-    const timer = setTimeout(resolve, milliseconds);
-    signal.addEventListener("abort", () => {
-      clearTimeout(timer);
-      resolve();
-    }, { once: true });
-  });
-}
 
 function normalizeEventSequence(value: string | undefined) {
   if (!value) return 0;
