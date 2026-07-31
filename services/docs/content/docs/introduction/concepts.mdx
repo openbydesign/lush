@@ -23,17 +23,40 @@ run.
 
 ## Sessions
 
-Shared conversations and active work contexts.
+Durable conversations and work contexts.
 
-Sessions own messages and active work state so the same interaction can move
-across desktop, web, mobile, and team chat.
+Sessions own messages and resumable interaction state so the same conversation
+can move across desktop, web, mobile, and team chat. A session contains many
+agent runs; it is not itself an execution process or security boundary.
 
-## Agents
+## Managed Agents
 
-Agent execution and sandbox orchestration.
+Versioned definitions of instructions, model policy, tools, skills, memory, and
+execution limits.
 
-The agents boundary manages execution contexts, hosted sandboxes, and local
-development subprocesses behind one control-plane interface.
+The built-in Lush assistant is the first managed agent. Organization policy
+sets its capability ceiling, while a user's configuration may only narrow that
+ceiling. Runs pin immutable agent and installation revisions so later edits do
+not change in-flight or historical behavior.
+
+## Agent Runs
+
+One durable execution of an agent in a session, normally one user turn.
+
+A run snapshots its effective configuration and capabilities and owns an
+ordered event log, idempotency, cancellation, recovery, and terminal outcome.
+Every first-party Chat turn is an agent run, even when it has no tools. Raw
+programmatic inference calls outside Chat do not create runs.
+
+## Agent Environments
+
+The execution venue for one or more runs.
+
+Run identity and execution venue are separate. Ordinary Chat uses an ephemeral
+environment; Code can bind multiple runs to one session environment so its
+workspace and harness state survive between turns. Capability-enabled runs
+require an isolating provider. A local subprocess is a development execution
+provider, not a production security boundary.
 
 ## Inference
 
@@ -44,10 +67,17 @@ request mediation across interchangeable model backends.
 
 ## Tools
 
-Scoped access to MCP, OpenAPI, and tool systems.
+Governed access to MCP, OpenAPI, and Lush-native capabilities.
 
-Tools mediate external capabilities so models receive narrow, governed access
-instead of raw URLs, credentials, or provider-specific details.
+A tool connection configures an integration and its credential mode; a tool
+definition is one capability discovered from that connection; a tool call is
+one attributable invocation by a run. Keeping them separate lets one
+connection expose many independently governed tools.
+
+The organization **Tool gateway** defines the available catalog and policy
+ceiling. **My tools** holds a user's private connections and personal settings,
+which may narrow but never expand organization policy. Models receive scoped
+definitions and short-lived capabilities instead of raw URLs or credentials.
 
 ## Skills
 

@@ -4,12 +4,17 @@ import { createDb, closeDb, getDb } from "../packages/db/src/client";
 import { migrateToLatest } from "../packages/db/src/migrate";
 import { integrationDatabaseUrl } from "./integration-database";
 import {
+  acknowledgeConnectionCatalog,
   createToolConnection,
   deleteToolConnection,
   discoverConnectionCatalog,
+  getToolGatewaySettings,
   isToolGatewayEnabled,
   listToolConnections,
+  listToolDefinitions,
   updateToolConnection,
+  updateToolDefinition,
+  updateToolGatewaySettings,
   requireVisibleConnection,
   type ToolsPrincipal
 } from "../services/tools/src/runtime";
@@ -23,6 +28,10 @@ import { canonicalJson, sha256Hex } from "../services/tools/src/digest";
 import { validateInput } from "../services/tools/src/validate";
 import { createAgentRun } from "../services/agent/src/runs";
 import { createSession } from "../services/sessions/src/runtime";
+import {
+  parseMcpConfig,
+  parseOpenApiConfig
+} from "../services/tools/src/connector-factory";
 
 async function invokeTool(
   principal: ToolsPrincipal,
@@ -87,6 +96,17 @@ test("object enum validation is independent of key insertion order", () => {
   ).toEqual({ ok: true });
 });
 
+test("remote connector credential headers reject reserved and invalid names", () => {
+  for (const parse of [parseMcpConfig, parseOpenApiConfig]) {
+    expect(() => parse({ url: "https://tools.example", authHeader: "Host" }))
+      .toThrow("reserved");
+    expect(() => parse({ url: "https://tools.example", authHeader: "x-api-key\r\nx" }))
+      .toThrow("invalid");
+    expect(parse({ url: "https://tools.example", authHeader: "X-API-Key" }))
+      .toMatchObject({ authHeader: "x-api-key" });
+  }
+});
+
 if (!databaseUrl) {
   test.skip("tool gateway integration requires a test database URL", () => {});
 } else {
@@ -95,13 +115,16 @@ if (!databaseUrl) {
     let adminDb: ReturnType<typeof createDb>;
     let previousDatabaseUrl: string | undefined;
     let previousSecret: string | undefined;
+    let previousToolKey: string | undefined;
     let previousEgress: string | undefined;
 
     beforeAll(async () => {
       previousDatabaseUrl = process.env.DATABASE_URL;
       previousSecret = process.env.LUSH_SECRET_KEY;
+      previousToolKey = process.env.LUSH_TOOL_CREDENTIAL_KEY;
       previousEgress = process.env.LUSH_TOOLS_ALLOW_PRIVATE_EGRESS;
       process.env.LUSH_SECRET_KEY = "test-secret-key";
+      process.env.LUSH_TOOL_CREDENTIAL_KEY = "test-tool-credential-key";
       process.env.LUSH_TOOLS_ALLOW_PRIVATE_EGRESS = "true";
 
       schemaName = `test_${crypto.randomUUID().replace(/-/g, "")}`;
@@ -123,6 +146,7 @@ if (!databaseUrl) {
       await adminDb.destroy();
       restoreEnv("DATABASE_URL", previousDatabaseUrl);
       restoreEnv("LUSH_SECRET_KEY", previousSecret);
+      restoreEnv("LUSH_TOOL_CREDENTIAL_KEY", previousToolKey);
       restoreEnv("LUSH_TOOLS_ALLOW_PRIVATE_EGRESS", previousEgress);
     });
 
@@ -134,6 +158,7 @@ if (!databaseUrl) {
       await db.deleteFrom("toolDefinitions").execute();
       await db.deleteFrom("toolCredentialBindings").execute();
       await db.deleteFrom("toolConnections").execute();
+      openApiVersion = 1;
     });
 
     // ---- MCP mock server ---------------------------------------------------
@@ -208,37 +233,60 @@ if (!databaseUrl) {
       return { userId: user.id, organizationId, role };
     }
 
-    test("native connection: discover and invoke a read-only tool", async () => {
-      const principal = await seedPrincipal("admin");
+    async function builtInConnection(principal: ToolsPrincipal) {
+      const connection = (await listToolConnections(principal)).find(
+        (candidate) => candidate.systemManaged && candidate.source === "native"
+      );
+      if (!connection) throw new Error("Built-in tool connection was not provisioned");
+      return connection;
+    }
+
+    async function allowedMcpConnection(principal: ToolsPrincipal) {
       const connection = await createToolConnection(principal, {
         scope: "organization",
-        source: "native",
-        label: "Built-in tools"
+        source: "mcp",
+        label: "Allowed mock MCP",
+        endpoint: { url: endpoint }
       });
-      expect(connection.scope).toBe("organization");
-
       const definitions = await discoverConnectionCatalog(
         principal,
         connection.id,
         new AbortController().signal
       );
-      expect(definitions.map((d) => d.externalName)).toContain("current_time");
-
-      const outcome = await invokeTool(principal, {
+      await updateToolConnection(principal, {
         connectionId: connection.id,
-        toolName: "current_time",
-        input: { timeZone: "UTC" }
+        policy: { approval: "never" }
       });
-      expect(outcome.status).toBe("succeeded");
-      if (outcome.status === "succeeded") {
-        expect(outcome.result.isError).toBe(false);
-      }
+      return { connection, definitions };
+    }
 
-      // The call is persisted and attributable.
-      const calls = await getDb().selectFrom("toolCalls").selectAll().execute();
-      expect(calls).toHaveLength(1);
-      expect(calls[0]!.initiatedByUserId).toBe(principal.userId);
-      expect(calls[0]!.status).toBe("succeeded");
+    test("the built-in catalog is provisioned without placeholder tools", async () => {
+      const principal = await seedPrincipal("admin");
+      const provisioned = await builtInConnection(principal);
+      expect(provisioned).toMatchObject({
+        scope: "organization",
+        source: "native",
+        systemManaged: true,
+        enabled: true,
+        label: "Built-in tools"
+      });
+      expect(await listToolDefinitions(principal, provisioned.id)).toEqual([]);
+      await expect(
+        createToolConnection(principal, {
+          scope: "organization",
+          source: "native",
+          label: "Duplicate built-in"
+        })
+      ).rejects.toMatchObject({ code: "invalid_connection" });
+      await expect(
+        discoverConnectionCatalog(principal, provisioned.id, new AbortController().signal)
+      ).rejects.toMatchObject({ code: "system_connection_managed" });
+      await expect(deleteToolConnection(principal, provisioned.id)).rejects.toMatchObject({
+        code: "system_connection_managed"
+      });
+      await expect(
+        updateToolConnection(principal, { connectionId: provisioned.id, enabled: false })
+      ).rejects.toMatchObject({ code: "system_connection_managed" });
     });
 
     test("tool gateway rollout is disabled per organization by default", async () => {
@@ -252,19 +300,30 @@ if (!databaseUrl) {
       expect(await isToolGatewayEnabled(principal.organizationId)).toBe(true);
     });
 
+    test("tool gateway settings are readable by members and writable only by admins", async () => {
+      const admin = await seedPrincipal("admin");
+      const member = await seedMember(admin.organizationId, "user");
+      expect(await getToolGatewaySettings(member)).toEqual({
+        enabled: false,
+        canManageOrganization: false
+      });
+      await expect(updateToolGatewaySettings(member, true)).rejects.toMatchObject({
+        code: "forbidden"
+      });
+      expect(await updateToolGatewaySettings(admin, true)).toEqual({
+        enabled: true,
+        canManageOrganization: true
+      });
+    });
+
     test("input validation rejects unexpected properties before invocation", async () => {
       const principal = await seedPrincipal("admin");
-      const connection = await createToolConnection(principal, {
-        scope: "organization",
-        source: "native",
-        label: "Built-in"
-      });
-      await discoverConnectionCatalog(principal, connection.id, new AbortController().signal);
+      const { connection } = await allowedMcpConnection(principal);
 
       await expect(
         invokeTool(principal, {
           connectionId: connection.id,
-          toolName: "current_time",
+          toolName: "echo",
           input: { unexpected: true }
         })
       ).rejects.toMatchObject({ code: "input_invalid" });
@@ -288,8 +347,9 @@ if (!databaseUrl) {
 
       const priv = await createToolConnection(owner, {
         scope: "user",
-        source: "native",
-        label: "My private tools"
+        source: "mcp",
+        label: "My private tools",
+        endpoint: { url: endpoint }
       });
 
       // Owner sees it.
@@ -305,7 +365,7 @@ if (!databaseUrl) {
       await expect(
         invokeTool(otherUser, {
           connectionId: priv.id,
-          toolName: "current_time",
+          toolName: "echo",
           input: {}
         })
       ).rejects.toMatchObject({ code: "connection_not_found" });
@@ -318,28 +378,46 @@ if (!databaseUrl) {
       await expect(
         createToolConnection(member, {
           scope: "organization",
-          source: "native",
-          label: "Shared"
+          source: "mcp",
+          label: "Shared",
+          endpoint: { url: endpoint }
         })
       ).rejects.toMatchObject({ code: "forbidden" });
 
       await expect(
         createToolConnection(member, {
-          source: "native",
-          label: "Missing scope"
+          source: "mcp",
+          label: "Missing scope",
+          endpoint: { url: endpoint }
         } as never)
       ).rejects.toMatchObject({ code: "invalid_connection" });
 
       const shared = await createToolConnection(admin, {
         scope: "organization",
-        source: "native",
-        label: "Shared"
+        source: "mcp",
+        label: "Shared",
+        endpoint: { url: endpoint }
       });
       await expect(
         updateToolConnection(member, { connectionId: shared.id, enabled: false })
       ).rejects.toMatchObject({ code: "forbidden" });
       await expect(
         discoverConnectionCatalog(member, shared.id, new AbortController().signal)
+      ).rejects.toMatchObject({ code: "forbidden" });
+      await expect(
+        acknowledgeConnectionCatalog(member, shared.id)
+      ).rejects.toMatchObject({ code: "forbidden" });
+
+      const [sharedDefinition] = await discoverConnectionCatalog(
+        admin,
+        shared.id,
+        new AbortController().signal
+      );
+      await expect(
+        updateToolDefinition(member, {
+          definitionId: sharedDefinition!.id,
+          enabled: true
+        })
       ).rejects.toMatchObject({ code: "forbidden" });
     });
 
@@ -365,8 +443,9 @@ if (!databaseUrl) {
 
       const noCredential = await createToolConnection(principal, {
         scope: "organization",
-        source: "native",
-        label: "No credentials"
+        source: "mcp",
+        label: "No credentials",
+        endpoint: { url: endpoint }
       });
       await expect(
         updateToolConnection(principal, {
@@ -376,22 +455,21 @@ if (!databaseUrl) {
       ).rejects.toMatchObject({ code: "invalid_connection" });
     });
 
-    test("disabled connections deny invocation", async () => {
+    test("disabled tools deny invocation independently of their connection", async () => {
       const principal = await seedPrincipal("admin");
-      const connection = await createToolConnection(principal, {
-        scope: "organization",
-        source: "native",
-        label: "Built-in"
+      const { connection, definitions } = await allowedMcpConnection(principal);
+      const definition = definitions.find((candidate) => candidate.externalName === "echo")!;
+      await updateToolDefinition(principal, {
+        definitionId: definition.id,
+        enabled: false
       });
-      await discoverConnectionCatalog(principal, connection.id, new AbortController().signal);
-      await updateToolConnection(principal, { connectionId: connection.id, enabled: false });
 
       const outcome = await invokeTool(principal, {
         connectionId: connection.id,
-        toolName: "current_time",
+        toolName: "echo",
         input: {}
       });
-      expect(outcome).toMatchObject({ status: "denied", reason: "connection_disabled" });
+      expect(outcome).toMatchObject({ status: "denied", reason: "tool_disabled" });
     });
 
     test("MCP connection: discover, invoke over SSE, and enforce the approval binding", async () => {
@@ -480,6 +558,111 @@ if (!databaseUrl) {
         input: { a: 9, b: 9 }
       });
       expect(third.status).toBe("approval_required");
+    });
+
+    test("OpenAPI discovery records health, catalog changes, policy, and invokes through the gateway", async () => {
+      const principal = await seedPrincipal("admin");
+      const connection = await createToolConnection(principal, {
+        scope: "organization",
+        source: "openapi",
+        label: "Mock OpenAPI",
+        endpoint: { url: endpoint.replace("/mcp", "/openapi.json") }
+      });
+      expect(connection.health.status).toBe("unknown");
+
+      const definitions = await discoverConnectionCatalog(
+        principal,
+        connection.id,
+        new AbortController().signal
+      );
+      expect(definitions).toHaveLength(1);
+      expect(definitions[0]).toMatchObject({
+        externalName: "getPet",
+        policy: {
+          decision: "approve",
+          reasons: ["tool_destructive", "tool_open_world"]
+        }
+      });
+      expect(JSON.stringify(definitions[0]?.outputSchema)).not.toContain("$ref");
+      expect(definitions[0]?.outputSchema).toMatchObject({
+        properties: { owner: { properties: { name: { type: "string" } } } }
+      });
+      expect((await listToolConnections(principal))[0]).toMatchObject({
+        catalogChanged: false,
+        health: { status: "healthy", errorCode: null }
+      });
+
+      const first = await invokeTool(principal, {
+        connectionId: connection.id,
+        toolName: "getPet",
+        input: { path: { petId: "42" }, query: { detail: true } }
+      });
+      expect(first.status).toBe("approval_required");
+      if (first.status !== "approval_required") return;
+      await decideToolApproval(principal, first.approval.approvalId, true);
+      const result = await invokeTool(principal, {
+        connectionId: connection.id,
+        toolName: "getPet",
+        input: { path: { petId: "42" }, query: { detail: true } }
+      });
+      expect(result).toMatchObject({
+        status: "succeeded",
+        result: { structured: { id: "42", detail: true } }
+      });
+
+      const traversalPending = await invokeTool(principal, {
+        connectionId: connection.id,
+        toolName: "getPet",
+        input: { path: { petId: ".." } }
+      });
+      expect(traversalPending.status).toBe("approval_required");
+      if (traversalPending.status !== "approval_required") return;
+      await decideToolApproval(
+        principal,
+        traversalPending.approval.approvalId,
+        true
+      );
+      const traversal = await invokeTool(principal, {
+        connectionId: connection.id,
+        toolName: "getPet",
+        input: { path: { petId: ".." } }
+      });
+      expect(traversal).toMatchObject({ status: "failed" });
+      expect(JSON.stringify(traversal)).toContain("openapi_path_parameter_unsafe");
+
+      openApiVersion = 2;
+      await discoverConnectionCatalog(principal, connection.id, new AbortController().signal);
+      expect((await listToolConnections(principal))[0]?.catalogChanged).toBe(true);
+      await discoverConnectionCatalog(principal, connection.id, new AbortController().signal);
+      expect((await listToolConnections(principal))[0]?.catalogChanged).toBe(true);
+      await acknowledgeConnectionCatalog(principal, connection.id);
+      expect((await listToolConnections(principal))[0]?.catalogChanged).toBe(false);
+      await discoverConnectionCatalog(principal, connection.id, new AbortController().signal);
+      expect((await listToolConnections(principal))[0]?.catalogChanged).toBe(false);
+    });
+
+    test("OpenAPI discovery rejects cross-origin servers and cyclic schemas", async () => {
+      const principal = await seedPrincipal("admin");
+      for (const [variant, code] of [
+        ["cross-origin", "openapi_cross_origin_server"],
+        ["cycle", "openapi_schema_cycle"]
+      ] as const) {
+        const connection = await createToolConnection(principal, {
+          scope: "organization",
+          source: "openapi",
+          label: `Mock OpenAPI ${variant}`,
+          endpoint: {
+            url: `${endpoint.replace("/mcp", "/openapi.json")}?variant=${variant}`
+          }
+        });
+        await expect(
+          discoverConnectionCatalog(
+            principal,
+            connection.id,
+            new AbortController().signal
+          )
+        ).rejects.toMatchObject({ code });
+      }
     });
 
     test("an approval granted for one run does not authorize another run", async () => {
@@ -639,16 +822,8 @@ if (!databaseUrl) {
 
     test("expiring an approval closes its pending tool call", async () => {
       const principal = await seedPrincipal("admin");
-      const connection = await createToolConnection(principal, {
-        scope: "organization",
-        source: "native",
-        label: "Built-in"
-      });
-      const [definition] = await discoverConnectionCatalog(
-        principal,
-        connection.id,
-        new AbortController().signal
-      );
+      const { connection, definitions } = await allowedMcpConnection(principal);
+      const [definition] = definitions;
       const db = getDb();
       const past = new Date(Date.now() - 60_000);
 
@@ -744,16 +919,8 @@ if (!databaseUrl) {
 
     test("idempotency replays a failed call and rejects an in-flight one", async () => {
       const principal = await seedPrincipal("admin");
-      const connection = await createToolConnection(principal, {
-        scope: "organization",
-        source: "native",
-        label: "Built-in"
-      });
-      const [definition] = await discoverConnectionCatalog(
-        principal,
-        connection.id,
-        new AbortController().signal
-      );
+      const { connection, definitions } = await allowedMcpConnection(principal);
+      const definition = definitions.find((candidate) => candidate.externalName === "echo")!;
       const now = new Date();
       const emptyInputDigest = await sha256Hex(canonicalJson({}));
 
@@ -782,7 +949,7 @@ if (!databaseUrl) {
 
       const replayFailed = await invokeTool(principal, {
         connectionId: connection.id,
-        toolName: "current_time",
+        toolName: "echo",
         input: {},
         idempotencyKey: failedKey
       });
@@ -810,7 +977,7 @@ if (!databaseUrl) {
       await expect(
         invokeTool(principal, {
           connectionId: connection.id,
-          toolName: "current_time",
+          toolName: "echo",
           input: {},
           idempotencyKey: runningKey
         })
@@ -819,24 +986,19 @@ if (!databaseUrl) {
 
     test("idempotency key returns the prior successful call", async () => {
       const principal = await seedPrincipal("admin");
-      const connection = await createToolConnection(principal, {
-        scope: "organization",
-        source: "native",
-        label: "Built-in"
-      });
-      await discoverConnectionCatalog(principal, connection.id, new AbortController().signal);
+      const { connection } = await allowedMcpConnection(principal);
 
       const key = crypto.randomUUID();
       const one = await invokeTool(principal, {
         connectionId: connection.id,
-        toolName: "current_time",
-        input: { timeZone: "UTC" },
+        toolName: "echo",
+        input: { message: "hello" },
         idempotencyKey: key
       });
       const two = await invokeTool(principal, {
         connectionId: connection.id,
-        toolName: "current_time",
-        input: { timeZone: "UTC" },
+        toolName: "echo",
+        input: { message: "hello" },
         idempotencyKey: key
       });
       expect(one.status).toBe("succeeded");
@@ -850,17 +1012,12 @@ if (!databaseUrl) {
 
     test("concurrent use of one idempotency key creates at most one call", async () => {
       const principal = await seedPrincipal("admin");
-      const connection = await createToolConnection(principal, {
-        scope: "organization",
-        source: "native",
-        label: "Built-in"
-      });
-      await discoverConnectionCatalog(principal, connection.id, new AbortController().signal);
+      const { connection } = await allowedMcpConnection(principal);
       const key = crypto.randomUUID();
       const request = {
         connectionId: connection.id,
-        toolName: "current_time",
-        input: { timeZone: "UTC" },
+        toolName: "echo",
+        input: { message: "hello" },
         idempotencyKey: key
       };
       const results = await Promise.allSettled([
@@ -880,24 +1037,19 @@ if (!databaseUrl) {
     test("idempotency is principal-scoped and rejects operation mismatches", async () => {
       const owner = await seedPrincipal("admin");
       const member = await seedMember(owner.organizationId, "user");
-      const connection = await createToolConnection(owner, {
-        scope: "organization",
-        source: "native",
-        label: "Built-in"
-      });
-      await discoverConnectionCatalog(owner, connection.id, new AbortController().signal);
+      const { connection } = await allowedMcpConnection(owner);
 
       const sharedKey = crypto.randomUUID();
       const ownerCall = await invokeTool(owner, {
         connectionId: connection.id,
-        toolName: "current_time",
-        input: { timeZone: "UTC" },
+        toolName: "echo",
+        input: { message: "hello" },
         idempotencyKey: sharedKey
       });
       const memberCall = await invokeTool(member, {
         connectionId: connection.id,
-        toolName: "current_time",
-        input: { timeZone: "UTC" },
+        toolName: "echo",
+        input: { message: "hello" },
         idempotencyKey: sharedKey
       });
       expect(ownerCall.status).toBe("succeeded");
@@ -909,8 +1061,8 @@ if (!databaseUrl) {
       await expect(
         invokeTool(owner, {
           connectionId: connection.id,
-          toolName: "current_time",
-          input: { timeZone: "America/Los_Angeles" },
+          toolName: "echo",
+          input: { message: "different" },
           idempotencyKey: sharedKey
         })
       ).rejects.toMatchObject({ code: "idempotency_mismatch" });
@@ -958,15 +1110,32 @@ if (!databaseUrl) {
       const principal = await seedPrincipal("admin");
       const connection = await createToolConnection(principal, {
         scope: "organization",
-        source: "native",
-        label: "Built-in"
+        source: "mcp",
+        label: "Disposable MCP",
+        endpoint: { url: endpoint },
+        credentialMode: "organization",
+        secret: "temporary-secret"
       });
       await discoverConnectionCatalog(principal, connection.id, new AbortController().signal);
       await deleteToolConnection(principal, connection.id);
 
-      expect(await listToolConnections(principal)).toHaveLength(0);
-      const defs = await getDb().selectFrom("toolDefinitions").selectAll().execute();
-      expect(defs).toHaveLength(0);
+      expect((await listToolConnections(principal)).map((row) => row.id)).not.toContain(
+        connection.id
+      );
+      expect(
+        await getDb()
+          .selectFrom("toolDefinitions")
+          .selectAll()
+          .where("connectionId", "=", connection.id)
+          .execute()
+      ).toHaveLength(0);
+      expect(
+        await getDb()
+          .selectFrom("toolCredentialBindings")
+          .selectAll()
+          .where("connectionId", "=", connection.id)
+          .execute()
+      ).toHaveLength(0);
     });
   });
 }
@@ -983,8 +1152,83 @@ function restoreEnv(name: string, value: string | undefined) {
 
 let authHeaderSink: ((value: string) => void) | undefined;
 let toolCallSink: (() => void) | undefined;
+let openApiVersion = 1;
 
 async function mcpMock(request: Request): Promise<Response> {
+  const url = new URL(request.url);
+  if (url.pathname === "/openapi.json") {
+    const variant = url.searchParams.get("variant");
+    return Response.json({
+      openapi: "3.1.0",
+      info: { title: "Mock", version: String(openApiVersion) },
+      servers:
+        variant === "cross-origin"
+          ? [{ url: url.origin }, { url: "https://other.example" }]
+          : [{ url: url.origin }],
+      components: {
+        schemas: {
+          Owner: {
+            type: "object",
+            properties: { name: { type: "string" } }
+          },
+          Pet: {
+            type: "object",
+            properties: {
+              id: { type: "string" },
+              owner: { $ref: "#/components/schemas/Owner" }
+            }
+          },
+          CycleA: { $ref: "#/components/schemas/CycleB" },
+          CycleB: { $ref: "#/components/schemas/CycleA" }
+        }
+      },
+      paths: {
+        "/pets/{petId}": {
+          get: {
+            operationId: "getPet",
+            summary: "Get pet",
+            parameters: [
+              {
+                name: "petId",
+                in: "path",
+                required: true,
+                schema: { type: "string" }
+              },
+              {
+                name: "detail",
+                in: "query",
+                schema: { type: openApiVersion === 1 ? "boolean" : "string" }
+              }
+            ],
+            responses: {
+              "200": {
+                description: "ok",
+                content: {
+                  "application/json": {
+                    schema: {
+                      $ref:
+                        variant === "cycle"
+                          ? "#/components/schemas/CycleA"
+                          : "#/components/schemas/Pet"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    });
+  }
+  if (url.pathname === "/pets/42") {
+    return Response.json({
+      id: "42",
+      detail: url.searchParams.get("detail") === "true"
+    });
+  }
+  if (request.method === "GET") {
+    return new Response("not found", { status: 404 });
+  }
   const auth = request.headers.get("authorization");
   if (auth && authHeaderSink) {
     authHeaderSink(auth);
@@ -1022,7 +1266,14 @@ async function mcpMock(request: Request): Promise<Response> {
             {
               name: "echo",
               description: "echo",
-              inputSchema: { type: "object" },
+              inputSchema: {
+                type: "object",
+                properties: {
+                  message: { type: "string" },
+                  hello: { type: "string" }
+                },
+                additionalProperties: false
+              },
               annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
             },
             {

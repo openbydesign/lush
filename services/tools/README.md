@@ -11,7 +11,8 @@ receive scoped capabilities rather than raw URLs or credentials.
 ### Connector plane (`src/connectors/`)
 
 - `native.ts` — trusted, in-process Lush tools with explicit schemas and policy
-  annotations. Ships one read-only tool (`current_time`).
+  annotations. The registry is currently empty; built-ins are added only when
+  they provide value beyond context already supplied to the agent.
 - `mcp/` — a stateful **MCP Streamable HTTP client** (spec revision 2025-11-25)
   implemented without an external SDK: JSON-RPC 2.0, `initialize` and version
   negotiation, `Mcp-Session-Id` handling, `notifications/initialized`, paginated
@@ -19,8 +20,9 @@ receive scoped capabilities rather than raw URLs or credentials.
   `text/event-stream` responses, and best-effort session termination. Sampling
   and elicitation are intentionally not honored — no MCP feature may bypass the
   run capability or approval model.
-- OpenAPI is stubbed (`501`) until the normalized contract is exercised by both
-  native and MCP sources.
+- `openapi.ts` imports OpenAPI 3.x JSON documents, persists normalized operation
+  metadata, and invokes JSON operations through the same guarded egress path.
+  Document and server origins must match before credentials can be forwarded.
 
 Every connector normalizes into a Lush-owned `ToolResult`. External tool
 descriptions and annotation hints are untrusted. Remote definitions receive the
@@ -29,10 +31,21 @@ restrictive Lush-owned risk class until an explicit review surface exists.
 ### Control plane (`src/runtime.ts`)
 
 CRUD for organization- and user-scoped connections, encrypted credential
-storage (`src/secrets.ts`), and catalog discovery/normalization. Reads are
+storage (`src/secrets.ts`), catalog discovery/normalization, durable health and
+catalog-change state, and effective policy explanations. Reads are
 scoped so a user never sees another user's private connection, and an
 administrator gets governance metadata but not another user's secret. Shared
 catalog refresh is a management operation and therefore administrator-only.
+
+Tool credentials use AES-256-GCM with connection-bound AAD. Version 2 derives
+the data key from `LUSH_TOOL_CREDENTIAL_KEY` using HKDF-SHA-256, UTF-8 key
+material, salt `lush/tools/hkdf-salt/v1`, and info
+`lush/tools/credential-encryption/v1`. `LUSH_TOOL_CREDENTIAL_KEY_PREVIOUS`
+accepts comma-separated prior roots during rotation. Reads under a prior root or
+the PR #101 v1 envelope are lazily rewritten under the active key; new writes
+never use legacy roots. Remove a prior root only after all stored connections
+have been exercised or explicitly re-saved and the old envelope key id is no
+longer present.
 
 ### Invocation plane (`src/gateway.ts`)
 
@@ -66,5 +79,5 @@ organization-level `tool_gateway_enabled` rollout flag.
 
 ## Not yet implemented
 
-Full agent capability resolution, OpenAPI import, `stdio` MCP servers,
+Full agent capability resolution, `stdio` MCP servers,
 broker-issued run capability tokens, and MCP resources/prompts/roots.

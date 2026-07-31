@@ -521,8 +521,10 @@ export type AgentRunEvent = {
 
 
 export type ToolSource = "mcp" | "openapi" | "native";
+export type CreatableToolSource = "mcp" | "openapi";
 export type ToolConnectionScope = "organization" | "user";
 export type ToolCredentialMode = "none" | "organization" | "user_delegated";
+export type ToolConnectionHealth = "unknown" | "healthy" | "unhealthy";
 
 export type ToolConnection = {
   id: string;
@@ -530,12 +532,19 @@ export type ToolConnection = {
   scope: ToolConnectionScope;
   ownerUserId: string | null;
   source: ToolSource;
+  systemManaged: boolean;
   label: string;
   endpoint: string | null;
   credentialMode: ToolCredentialMode;
   enabled: boolean;
   hasCredential: boolean;
   catalogVersion: string | null;
+  catalogChanged: boolean;
+  health: {
+    status: ToolConnectionHealth;
+    checkedAt: string | null;
+    errorCode: string | null;
+  };
   createdAt: string;
   updatedAt: string;
 };
@@ -563,6 +572,10 @@ export type ToolDefinition = {
   annotations: unknown;
   definitionDigest: string;
   enabled: boolean;
+  policy: {
+    decision: "allow" | "approve" | "deny";
+    reasons: string[];
+  };
 };
 
 export type ListToolDefinitionsResponse = {
@@ -571,7 +584,7 @@ export type ListToolDefinitionsResponse = {
 
 export type CreateToolConnectionRequest = {
   scope: ToolConnectionScope;
-  source: ToolSource;
+  source: CreatableToolSource;
   label: string;
   endpoint?: { url?: string; headers?: Record<string, string> };
   credentialMode?: ToolCredentialMode;
@@ -583,10 +596,35 @@ export type UpdateToolConnectionRequest = {
   label?: string;
   enabled?: boolean;
   secret?: string | null;
+  policy?: {
+    deny?: boolean;
+    approval?: "default" | "never" | "every_call";
+  };
+};
+
+export type UpdateToolDefinitionRequest = {
+  definitionId: string;
+  enabled: boolean;
+};
+
+export type ToolGatewaySettings = {
+  enabled: boolean;
+  canManageOrganization: boolean;
+};
+
+export type UpdateToolGatewaySettingsRequest = {
+  enabled: boolean;
 };
 
 export type DeleteToolConnectionRequest = {
   connectionId: string;
+};
+
+export type AcknowledgeToolCatalogRequest = Record<string, never>;
+
+export type AcknowledgeToolCatalogResponse = {
+  connectionId: string;
+  catalogVersion: string;
 };
 
 export type DeletedToolConnection = {
@@ -1092,6 +1130,23 @@ export const apiRoutes = [
     "kind": "stream"
   },
   {
+    "id": "getToolGatewaySettings",
+    "method": "GET",
+    "path": "/v1beta/tools/settings",
+    "responseType": "ToolGatewaySettings",
+    "auth": true,
+    "kind": "json"
+  },
+  {
+    "id": "updateToolGatewaySettings",
+    "method": "POST",
+    "path": "/v1beta/tools/settings",
+    "requestType": "UpdateToolGatewaySettingsRequest",
+    "responseType": "ToolGatewaySettings",
+    "auth": true,
+    "kind": "json"
+  },
+  {
     "id": "listToolConnections",
     "method": "GET",
     "path": "/v1beta/tools/connections",
@@ -1135,10 +1190,28 @@ export const apiRoutes = [
     "kind": "json"
   },
   {
+    "id": "updateToolDefinition",
+    "method": "POST",
+    "path": "/v1beta/tools/definitions/update",
+    "requestType": "UpdateToolDefinitionRequest",
+    "responseType": "ToolDefinition",
+    "auth": true,
+    "kind": "json"
+  },
+  {
     "id": "discoverToolCatalog",
     "method": "POST",
     "path": "/v1beta/tools/connections/:connectionId/discover",
     "responseType": "ListToolDefinitionsResponse",
+    "auth": true,
+    "kind": "json"
+  },
+  {
+    "id": "acknowledgeToolCatalog",
+    "method": "POST",
+    "path": "/v1beta/tools/connections/:connectionId/catalog/acknowledge",
+    "requestType": "AcknowledgeToolCatalogRequest",
+    "responseType": "AcknowledgeToolCatalogResponse",
     "auth": true,
     "kind": "json"
   },
@@ -1214,12 +1287,16 @@ const STREAM_AGENT_RUN_EVENTS_ROUTE = apiRoutes.find((route) => route.id === "st
 const CANCEL_AGENT_RUN_ROUTE = apiRoutes.find((route) => route.id === "cancelAgentRun")!;
 const STREAM_AGENT_CHAT_ROUTE = apiRoutes.find((route) => route.id === "streamAgentChat")!;
 const STREAM_AGENT_PROMPT_ROUTE = apiRoutes.find((route) => route.id === "streamAgentPrompt")!;
+const GET_TOOL_GATEWAY_SETTINGS_ROUTE = apiRoutes.find((route) => route.id === "getToolGatewaySettings")!;
+const UPDATE_TOOL_GATEWAY_SETTINGS_ROUTE = apiRoutes.find((route) => route.id === "updateToolGatewaySettings")!;
 const LIST_TOOL_CONNECTIONS_ROUTE = apiRoutes.find((route) => route.id === "listToolConnections")!;
 const CREATE_TOOL_CONNECTION_ROUTE = apiRoutes.find((route) => route.id === "createToolConnection")!;
 const UPDATE_TOOL_CONNECTION_ROUTE = apiRoutes.find((route) => route.id === "updateToolConnection")!;
 const DELETE_TOOL_CONNECTION_ROUTE = apiRoutes.find((route) => route.id === "deleteToolConnection")!;
 const LIST_TOOL_DEFINITIONS_ROUTE = apiRoutes.find((route) => route.id === "listToolDefinitions")!;
+const UPDATE_TOOL_DEFINITION_ROUTE = apiRoutes.find((route) => route.id === "updateToolDefinition")!;
 const DISCOVER_TOOL_CATALOG_ROUTE = apiRoutes.find((route) => route.id === "discoverToolCatalog")!;
+const ACKNOWLEDGE_TOOL_CATALOG_ROUTE = apiRoutes.find((route) => route.id === "acknowledgeToolCatalog")!;
 const INVOKE_TOOL_ROUTE = apiRoutes.find((route) => route.id === "invokeTool")!;
 const DECIDE_TOOL_APPROVAL_ROUTE = apiRoutes.find((route) => route.id === "decideToolApproval")!;
 
@@ -2345,6 +2422,46 @@ export function streamAgentPrompt(
   });
 }
 
+export async function getToolGatewaySettings(
+  apiBaseUrl: string,
+  sessionToken: string | undefined,
+) {
+  const response = await fetch(apiUrl(apiBaseUrl, GET_TOOL_GATEWAY_SETTINGS_ROUTE.path), {
+    credentials: "include",
+    headers: {
+      ...authorizationHeaders(sessionToken),
+
+    }
+  });
+
+  if (!response.ok) {
+    throw await apiError("getToolGatewaySettings", response);
+  }
+
+  return response.json() as Promise<ToolGatewaySettings>;
+}
+
+export async function updateToolGatewaySettings(
+  apiBaseUrl: string,
+  sessionToken: string | undefined, body: UpdateToolGatewaySettingsRequest
+) {
+  const response = await fetch(apiUrl(apiBaseUrl, UPDATE_TOOL_GATEWAY_SETTINGS_ROUTE.path), {
+    method: "POST",
+    credentials: "include",
+    headers: {
+      ...authorizationHeaders(sessionToken),
+      "content-type": "application/json"
+    },
+    body: JSON.stringify(body)
+  });
+
+  if (!response.ok) {
+    throw await apiError("updateToolGatewaySettings", response);
+  }
+
+  return response.json() as Promise<ToolGatewaySettings>;
+}
+
 export async function listToolConnections(
   apiBaseUrl: string,
   sessionToken: string | undefined,
@@ -2447,6 +2564,27 @@ export async function listToolDefinitions(
   return response.json() as Promise<ListToolDefinitionsResponse>;
 }
 
+export async function updateToolDefinition(
+  apiBaseUrl: string,
+  sessionToken: string | undefined, body: UpdateToolDefinitionRequest
+) {
+  const response = await fetch(apiUrl(apiBaseUrl, UPDATE_TOOL_DEFINITION_ROUTE.path), {
+    method: "POST",
+    credentials: "include",
+    headers: {
+      ...authorizationHeaders(sessionToken),
+      "content-type": "application/json"
+    },
+    body: JSON.stringify(body)
+  });
+
+  if (!response.ok) {
+    throw await apiError("updateToolDefinition", response);
+  }
+
+  return response.json() as Promise<ToolDefinition>;
+}
+
 export async function discoverToolCatalog(
   apiBaseUrl: string,
   connectionId: string,
@@ -2467,6 +2605,28 @@ export async function discoverToolCatalog(
   }
 
   return response.json() as Promise<ListToolDefinitionsResponse>;
+}
+
+export async function acknowledgeToolCatalog(
+  apiBaseUrl: string,
+  connectionId: string,
+  sessionToken: string | undefined, body: AcknowledgeToolCatalogRequest
+) {
+  const response = await fetch(apiUrl(apiBaseUrl, routePath(ACKNOWLEDGE_TOOL_CATALOG_ROUTE.path, { connectionId })), {
+    method: "POST",
+    credentials: "include",
+    headers: {
+      ...authorizationHeaders(sessionToken),
+      "content-type": "application/json"
+    },
+    body: JSON.stringify(body)
+  });
+
+  if (!response.ok) {
+    throw await apiError("acknowledgeToolCatalog", response);
+  }
+
+  return response.json() as Promise<AcknowledgeToolCatalogResponse>;
 }
 
 export async function invokeTool(

@@ -477,6 +477,13 @@ and `every_call`. Destructive or open-world calls default to explicit approval.
 An approval binds the normalized input digest, tool definition digest, run,
 principal, and expiration. Editing arguments invalidates the approval.
 
+The Phase 2 connection-level `never` setting is an explicit manager override of
+that default, including for destructive and open-world calls. Only the owner may
+set it on a private connection and only an organization administrator may set it
+on a shared connection. It removes the human confirmation step, not live
+authorization, definition/input binding, idempotency, or audit enforcement, and
+the settings surface must present the destructive-call consequence clearly.
+
 The gateway returns `approval_required` rather than letting a sandbox invent a
 consent prompt. `services/agent` persists the paused run and streams an approval
 event to the client. The client submits the decision to an authenticated
@@ -1184,10 +1191,11 @@ production roadmap. The current issue map is:
 | Artifact storage and usage events | [#57](https://github.com/openbydesign/lush/issues/57), [#54](https://github.com/openbydesign/lush/issues/54) |
 | Streaming/ingress and forward-only migrations | [#51](https://github.com/openbydesign/lush/issues/51), [#52](https://github.com/openbydesign/lush/issues/52) |
 | OpenTelemetry | [#68](https://github.com/openbydesign/lush/issues/68), [#71](https://github.com/openbydesign/lush/issues/71), [#70](https://github.com/openbydesign/lush/issues/70) |
+| Tool control plane and direct invocation | [#107](https://github.com/openbydesign/lush/issues/107), [#103](https://github.com/openbydesign/lush/issues/103) |
 | Existing local Code correctness/security prerequisites | [#14](https://github.com/openbydesign/lush/issues/14), [#15](https://github.com/openbydesign/lush/issues/15), [#16](https://github.com/openbydesign/lush/issues/16), [#17](https://github.com/openbydesign/lush/issues/17), [#18](https://github.com/openbydesign/lush/issues/18), [#19](https://github.com/openbydesign/lush/issues/19), [#21](https://github.com/openbydesign/lush/issues/21) |
 
-No dedicated issue yet covers the tool connection/gateway, managed-agent
-definition and installation model, provider-neutral inference tool loop,
+No dedicated issue yet covers the managed-agent definition and installation
+model, provider-neutral inference tool loop,
 managed-agent editor, or skill/memory phases. Those gaps are explicitly listed
 in #72 and should be split into focused implementation issues before their
 respective phases begin.
@@ -1246,14 +1254,23 @@ first-token latency is measured against the current path.
 
 ### Phase 2: tool control plane and direct test invocation
 
+Primary tracking: [#107](https://github.com/openbydesign/lush/issues/107), with
+credential key separation and rotation in
+[#103](https://github.com/openbydesign/lush/issues/103).
+
 1. Implement organization and user connections, encrypted credential refs,
-   normalized definitions, health, catalog versions, and policy explanations.
-2. Implement one native read-only tool and one remote MCP Streamable HTTP
-   connection. Add OpenAPI import after the normalized contract is exercised by
-   both native and MCP sources.
+   normalized definitions, health, catalog versions, persistent catalog-change
+   review until a manager acknowledges the exact version, and policy explanations.
+2. Materialize code-owned native tools automatically as individually governed,
+   top-level organization tools that are disabled by default; native is not a
+   user-creatable connection source. Keep the native registry empty until a
+   built-in adds value beyond run context, and implement a remote MCP Streamable
+   HTTP connection. Add OpenAPI import after the normalized contract is exercised
+   by the common definition and gateway paths.
 3. Implement gateway invocation, input/output bounds, live authorization,
    approval records, idempotency, audit, and telemetry.
-4. Expose settings APIs and minimal organization/personal connection UI.
+4. Expose settings APIs and split the minimal UI into organization **Tool
+   gateway** governance and personal **My tools** access/preferences.
 
 Gate: users cannot see or invoke each other's private connections; organization
 role/policy tests pass; SSRF, redirect, secret-redaction, timeout, catalog-change,
@@ -1366,7 +1383,7 @@ The first externally useful slice should be deliberately narrow:
 
 - system-managed Lush agent resolved from the database;
 - one user-scoped and one organization-scoped connection path;
-- one native read-only tool plus one remote MCP tool;
+- one read-only and one approval-required remote MCP tool;
 - a durable Lush run in the sandbox;
 - one hosted Code session using a session-bound environment and an existing
   normalized harness adapter;
@@ -1390,7 +1407,8 @@ before the relevant phase:
    connections or only specific source/risk classes.
 2. Whether organization-shared connections initially support only service
    credentials or also per-user OAuth bindings under one shared connection.
-3. Which approval choices may be remembered and for how long.
+3. Which approval choices other than the explicit connection-level `never`
+   override may be remembered and for how long.
 4. Whether users may create private agents by default or organizations must
    enable the feature.
 5. Which memory writes are automatic for the built-in Lush agent versus shown

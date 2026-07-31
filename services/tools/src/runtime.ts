@@ -11,6 +11,7 @@
 import { getDb } from "@lush/db/client";
 import type {
   ToolConnectionRow,
+  ToolConnectionHealth,
   ToolCredentialMode,
   ToolDefinitionRow,
   ToolSource,
@@ -18,14 +19,29 @@ import type {
 } from "@lush/db/schema";
 import type { Transaction } from "kysely";
 import type { Database } from "@lush/db/schema";
-import { buildConnector, parseMcpConfig } from "./connector-factory";
+import {
+  buildConnector,
+  parseMcpConfig,
+  parseOpenApiConfig
+} from "./connector-factory";
 import {
   ConnectorError,
   restrictiveAnnotations,
   type NormalizedToolDefinition
 } from "./connectors/types";
+import { builtinNativeTools } from "./connectors/native";
 import { digestValue } from "./digest";
-import { decryptSecret, encryptSecret } from "./secrets";
+import {
+  decryptSecret,
+  encryptSecret,
+  secretEnvelopeNeedsRotation,
+  SecretError
+} from "./secrets";
+import {
+  explainToolPolicy,
+  normalizeConnectionPolicy,
+  type ToolPolicyExplanation
+} from "./policy";
 
 export class ToolError extends Error {
   constructor(
@@ -54,12 +70,19 @@ export type ToolConnectionSummary = {
   scope: ToolConnectionScope;
   ownerUserId: string | null;
   source: ToolSource;
+  systemManaged: boolean;
   label: string;
   endpoint: string | null;
   credentialMode: ToolCredentialMode;
   enabled: boolean;
   hasCredential: boolean;
   catalogVersion: string | null;
+  catalogChanged: boolean;
+  health: {
+    status: ToolConnectionHealth;
+    checkedAt: string | null;
+    errorCode: string | null;
+  };
   createdAt: string;
   updatedAt: string;
 };
@@ -77,6 +100,7 @@ export type ToolDefinitionSummary = {
   /** Stable digest a caller can pin and pass back as expectedDefinitionDigest. */
   definitionDigest: string;
   enabled: boolean;
+  policy: ToolPolicyExplanation;
 };
 
 export type CreateToolConnectionRequest = {
@@ -94,7 +118,23 @@ export type UpdateToolConnectionRequest = {
   label?: string;
   enabled?: boolean;
   secret?: string | null;
+  policy?: {
+    deny?: boolean;
+    approval?: "default" | "never" | "every_call";
+  };
 };
+
+export type UpdateToolDefinitionRequest = {
+  definitionId: string;
+  enabled: boolean;
+};
+
+export type ToolGatewaySettings = {
+  enabled: boolean;
+  canManageOrganization: boolean;
+};
+
+const BUILTIN_CONNECTION_KEY = "lush_builtin";
 
 /** Phase-2 rollout gate. Absence/default false keeps every HTTP route dark. */
 export async function isToolGatewayEnabled(organizationId: string): Promise<boolean> {
@@ -106,9 +146,94 @@ export async function isToolGatewayEnabled(organizationId: string): Promise<bool
   return organization?.toolGatewayEnabled === true;
 }
 
+export async function getToolGatewaySettings(
+  principal: ToolsPrincipal
+): Promise<ToolGatewaySettings> {
+  return {
+    enabled: await isToolGatewayEnabled(principal.organizationId),
+    canManageOrganization: principal.role === "admin"
+  };
+}
+
+export async function updateToolGatewaySettings(
+  principal: ToolsPrincipal,
+  enabled: unknown
+): Promise<ToolGatewaySettings> {
+  if (principal.role !== "admin") {
+    throw new ToolError(
+      "forbidden",
+      "Only organization administrators can change tool gateway settings",
+      403
+    );
+  }
+  if (typeof enabled !== "boolean") {
+    throw new ToolError("invalid_settings", "Tool gateway enabled must be a boolean");
+  }
+  await getDb()
+    .updateTable("organizations")
+    .set({ toolGatewayEnabled: enabled, updatedAt: new Date() })
+    .where("id", "=", principal.organizationId)
+    .execute();
+  return { enabled, canManageOrganization: true };
+}
+
+async function ensureBuiltinToolConnection(organizationId: string): Promise<void> {
+  const db = getDb();
+  const now = new Date();
+  await db
+    .insertInto("toolConnections")
+    .values({
+      organizationId,
+      ownerUserId: null,
+      source: "native",
+      systemKey: BUILTIN_CONNECTION_KEY,
+      label: "Built-in tools",
+      endpointConfig: {},
+      credentialMode: "none",
+      enabled: true,
+      policy: {},
+      catalogVersion: null,
+      catalogAcknowledgedVersion: null,
+      catalogChanged: false,
+      healthStatus: "unknown",
+      healthCheckedAt: null,
+      healthErrorCode: null,
+      createdAt: now,
+      updatedAt: now
+    })
+    .onConflict((oc) =>
+      oc.columns(["organizationId", "systemKey"]).doNothing()
+    )
+    .execute();
+
+  const connection = await db
+    .selectFrom("toolConnections")
+    .selectAll()
+    .where("organizationId", "=", organizationId)
+    .where("systemKey", "=", BUILTIN_CONNECTION_KEY)
+    .executeTakeFirstOrThrow();
+  if (!connection.enabled) {
+    await db
+      .updateTable("toolConnections")
+      .set({ enabled: true, updatedAt: now })
+      .where("id", "=", connection.id)
+      .execute();
+  }
+  const definitions: NormalizedToolDefinition[] = builtinNativeTools.map(
+    ({ handler: _handler, ...definition }) => definition
+  );
+  const catalogVersion = await digestValue(
+    [...definitions].sort((a, b) => a.externalName.localeCompare(b.externalName))
+  );
+  if (connection.catalogVersion !== catalogVersion) {
+    await persistConnectionCatalog(connection, definitions, true);
+  }
+}
+
 export async function listToolConnections(
   principal: ToolsPrincipal
 ): Promise<ToolConnectionSummary[]> {
+  await ensureBuiltinToolConnection(principal.organizationId);
   const rows = await getDb()
     .selectFrom("toolConnections")
     .selectAll()
@@ -134,8 +259,11 @@ export async function createToolConnection(
   if (request.scope !== "organization" && request.scope !== "user") {
     throw new ToolError("invalid_connection", "Connection scope must be organization or user");
   }
-  if (request.source !== "native" && request.source !== "mcp" && request.source !== "openapi") {
-    throw new ToolError("invalid_connection", "Connection source is invalid");
+  if (request.source !== "mcp" && request.source !== "openapi") {
+    throw new ToolError(
+      "invalid_connection",
+      "Native tools are system-managed and cannot be added as connections"
+    );
   }
   const label = typeof request.label === "string" ? request.label.trim() : "";
   if (!label) {
@@ -193,6 +321,11 @@ export async function createToolConnection(
         enabled: true,
         policy: {},
         catalogVersion: null,
+        catalogAcknowledgedVersion: null,
+        catalogChanged: false,
+        healthStatus: "unknown",
+        healthCheckedAt: null,
+        healthErrorCode: null,
         createdAt: now,
         updatedAt: now
       })
@@ -229,6 +362,18 @@ export async function updateToolConnection(
     throw new ToolError("invalid_connection", "Connection secret must be a string");
   }
   const connection = await requireConnectionForManagement(principal, request.connectionId);
+  if (
+    connection.systemKey !== null &&
+    (request.label !== undefined ||
+      request.secret !== undefined ||
+      request.enabled !== undefined)
+  ) {
+    throw new ToolError(
+      "system_connection_managed",
+      "Built-in connection identity and availability are managed per tool",
+      409
+    );
+  }
   const db = getDb();
   const now = new Date();
 
@@ -239,6 +384,23 @@ export async function updateToolConnection(
     }
     if (typeof request.enabled === "boolean") {
       changes.enabled = request.enabled;
+    }
+    if (request.policy !== undefined) {
+      if (!request.policy || typeof request.policy !== "object") {
+        throw new ToolError("invalid_policy", "Connection policy must be an object");
+      }
+      const rawPolicy = request.policy as Record<string, unknown>;
+      if (
+        Object.keys(rawPolicy).some((key) => key !== "deny" && key !== "approval") ||
+        (rawPolicy.deny !== undefined && typeof rawPolicy.deny !== "boolean") ||
+        (rawPolicy.approval !== undefined &&
+          rawPolicy.approval !== "default" &&
+          rawPolicy.approval !== "never" &&
+          rawPolicy.approval !== "every_call")
+      ) {
+        throw new ToolError("invalid_policy", "Connection policy is invalid");
+      }
+      changes.policy = normalizeConnectionPolicy(request.policy);
     }
     await trx
       .updateTable("toolConnections")
@@ -278,6 +440,13 @@ export async function deleteToolConnection(
   connectionId: string
 ): Promise<{ id: string }> {
   const connection = await requireConnectionForManagement(principal, connectionId);
+  if (connection.systemKey !== null) {
+    throw new ToolError(
+      "system_connection_managed",
+      "Built-in tool connections cannot be deleted",
+      409
+    );
+  }
   await getDb()
     .deleteFrom("toolConnections")
     .where("id", "=", connection.id)
@@ -289,14 +458,45 @@ export async function listToolDefinitions(
   principal: ToolsPrincipal,
   connectionId: string
 ): Promise<ToolDefinitionSummary[]> {
-  await requireVisibleConnection(principal, connectionId);
+  const connection = await requireVisibleConnection(principal, connectionId);
   const rows = await getDb()
     .selectFrom("toolDefinitions")
     .selectAll()
     .where("connectionId", "=", connectionId)
     .orderBy("externalName", "asc")
     .execute();
-  return rows.map(summarizeDefinition);
+  return rows.map((row) => summarizeDefinition(row, connection.policy));
+}
+
+export async function updateToolDefinition(
+  principal: ToolsPrincipal,
+  request: UpdateToolDefinitionRequest
+): Promise<ToolDefinitionSummary> {
+  if (!isUuid(request.definitionId) || typeof request.enabled !== "boolean") {
+    throw new ToolError(
+      "invalid_definition",
+      "A valid definitionId and enabled boolean are required"
+    );
+  }
+  const definition = await getDb()
+    .selectFrom("toolDefinitions")
+    .selectAll()
+    .where("id", "=", request.definitionId)
+    .executeTakeFirst();
+  if (!definition) {
+    throw new ToolError("definition_not_found", "Tool definition was not found", 404);
+  }
+  const connection = await requireConnectionForManagement(
+    principal,
+    definition.connectionId
+  );
+  const updated = await getDb()
+    .updateTable("toolDefinitions")
+    .set({ enabled: request.enabled, updatedAt: new Date() })
+    .where("id", "=", definition.id)
+    .returningAll()
+    .executeTakeFirstOrThrow();
+  return summarizeDefinition(updated, connection.policy);
 }
 
 /**
@@ -310,6 +510,13 @@ export async function discoverConnectionCatalog(
   signal: AbortSignal
 ): Promise<ToolDefinitionSummary[]> {
   const connection = await requireConnectionForManagement(principal, connectionId);
+  if (connection.systemKey !== null) {
+    throw new ToolError(
+      "system_connection_managed",
+      "Built-in tool definitions are synchronized automatically",
+      409
+    );
+  }
   const credential = await resolveCredential(connection, principal.userId);
   const connector = buildConnector({ connection, credential });
 
@@ -317,6 +524,11 @@ export async function discoverConnectionCatalog(
   try {
     discovered = await connector.discover(signal);
   } catch (error) {
+    const failure =
+      error instanceof ConnectorError
+        ? error
+        : new ConnectorError("discovery_failed", "Tool discovery failed", 502, error);
+    await updateConnectionHealth(connection.id, "unhealthy", failure.code);
     if (error instanceof ConnectorError) {
       throw new ToolError(error.code, error.message, error.status, error);
     }
@@ -325,6 +537,16 @@ export async function discoverConnectionCatalog(
     await connector.close?.();
   }
 
+  await persistConnectionCatalog(connection, discovered, false);
+
+  return listToolDefinitions(principal, connection.id);
+}
+
+async function persistConnectionCatalog(
+  connection: ToolConnectionRow,
+  discovered: NormalizedToolDefinition[],
+  autoAcknowledge: boolean
+): Promise<void> {
   const now = new Date();
   const orderedDiscovered = [...discovered].sort((a, b) =>
     a.externalName.localeCompare(b.externalName)
@@ -361,8 +583,12 @@ export async function discoverConnectionCatalog(
           inputSchema: tool.inputSchema,
           outputSchema: tool.outputSchema ?? null,
           annotations,
+          sourceMetadata: tool.sourceMetadata ?? {},
           definitionDigest,
-          enabled: true,
+          // Code-owned tools are visible immediately but require an explicit
+          // per-tool enable decision. Remote discovery retains its current
+          // connection-level default for this Phase-2 surface.
+          enabled: connection.systemKey === null,
           createdAt: now,
           updatedAt: now
         })
@@ -374,6 +600,7 @@ export async function discoverConnectionCatalog(
             inputSchema: eb.ref("excluded.inputSchema"),
             outputSchema: eb.ref("excluded.outputSchema"),
             annotations: eb.ref("excluded.annotations"),
+            sourceMetadata: eb.ref("excluded.sourceMetadata"),
             definitionDigest: eb.ref("excluded.definitionDigest"),
             updatedAt: now
           }))
@@ -381,14 +608,66 @@ export async function discoverConnectionCatalog(
         .execute();
     }
 
+    const current = await trx
+      .selectFrom("toolConnections")
+      .select(["catalogVersion", "catalogAcknowledgedVersion"])
+      .where("id", "=", connection.id)
+      .forUpdate()
+      .executeTakeFirstOrThrow();
+    // The first catalog is trusted as the connection's baseline. Later drift
+    // remains visible across refreshes until a manager explicitly acknowledges
+    // the exact observed version.
+    const acknowledgedVersion = autoAcknowledge
+      ? catalogVersion
+      : current.catalogAcknowledgedVersion ?? current.catalogVersion ?? catalogVersion;
+
     await trx
       .updateTable("toolConnections")
-      .set({ catalogVersion, updatedAt: now })
+      .set({
+        catalogVersion,
+        catalogAcknowledgedVersion: acknowledgedVersion,
+        catalogChanged: acknowledgedVersion !== catalogVersion,
+        healthStatus: "healthy",
+        healthCheckedAt: now,
+        healthErrorCode: null,
+        updatedAt: now
+      })
       .where("id", "=", connection.id)
       .execute();
   });
+}
 
-  return listToolDefinitions(principal, connection.id);
+export async function acknowledgeConnectionCatalog(
+  principal: ToolsPrincipal,
+  connectionId: string
+): Promise<{ connectionId: string; catalogVersion: string }> {
+  const connection = await requireConnectionForManagement(principal, connectionId);
+  if (!connection.catalogVersion) {
+    throw new ToolError(
+      "catalog_unavailable",
+      "Discover the connection catalog before acknowledging it",
+      409
+    );
+  }
+
+  const result = await getDb()
+    .updateTable("toolConnections")
+    .set({
+      catalogAcknowledgedVersion: connection.catalogVersion,
+      catalogChanged: false,
+      updatedAt: new Date()
+    })
+    .where("id", "=", connection.id)
+    .where("catalogVersion", "=", connection.catalogVersion)
+    .executeTakeFirst();
+  if (result.numUpdatedRows !== 1n) {
+    throw new ToolError(
+      "catalog_changed",
+      "The catalog changed while it was being acknowledged; review the latest definitions",
+      409
+    );
+  }
+  return { connectionId: connection.id, catalogVersion: connection.catalogVersion };
 }
 
 // ---------------------------------------------------------------------------
@@ -479,10 +758,29 @@ export async function resolveCredential(
     );
   }
 
-  return decryptSecret(binding.encryptedSecret, {
+  const context = {
     connectionId: connection.id,
     subjectUserId: binding.subjectUserId ?? "organization"
-  });
+  };
+  try {
+    const plaintext = await decryptSecret(binding.encryptedSecret, context);
+    if (await secretEnvelopeNeedsRotation(binding.encryptedSecret)) {
+      await getDb()
+        .updateTable("toolCredentialBindings")
+        .set({
+          encryptedSecret: await encryptSecret(plaintext, context),
+          updatedAt: new Date()
+        })
+        .where("id", "=", binding.id)
+        .execute();
+    }
+    return plaintext;
+  } catch (error) {
+    if (error instanceof SecretError) {
+      throw new ToolError(error.code, error.message, error.status, error);
+    }
+    throw error;
+  }
 }
 
 async function storeCredential(
@@ -494,10 +792,18 @@ async function storeCredential(
     now: Date;
   }
 ): Promise<void> {
-  const encryptedSecret = await encryptSecret(params.secret, {
-    connectionId: params.connectionId,
-    subjectUserId: params.subjectUserId ?? "organization"
-  });
+  let encryptedSecret: string;
+  try {
+    encryptedSecret = await encryptSecret(params.secret, {
+      connectionId: params.connectionId,
+      subjectUserId: params.subjectUserId ?? "organization"
+    });
+  } catch (error) {
+    if (error instanceof SecretError) {
+      throw new ToolError(error.code, error.message, error.status, error);
+    }
+    throw error;
+  }
 
   // Replace any existing binding for this (connection, subject). ON CONFLICT is
   // avoided because the uniqueness is enforced by two partial indexes (one for
@@ -566,7 +872,20 @@ function normalizeEndpoint(
     }
   }
   if (source === "openapi") {
-    throw new ToolError("unsupported_source", "OpenAPI connections are not yet supported", 501);
+    if (endpoint?.headers && Object.keys(endpoint.headers).length > 0) {
+      throw new ToolError(
+        "invalid_endpoint",
+        "Static endpoint headers are not supported; use an encrypted credential binding"
+      );
+    }
+    try {
+      return parseOpenApiConfig({ url: endpoint?.url });
+    } catch (error) {
+      if (error instanceof ConnectorError) {
+        throw new ToolError(error.code, error.message, error.status, error);
+      }
+      throw error;
+    }
   }
   return {};
 }
@@ -584,7 +903,8 @@ function summarizeConnection(
   credentialFlags: Set<string>
 ): ToolConnectionSummary {
   const endpoint =
-    row.source === "mcp" && row.endpointConfig && typeof row.endpointConfig === "object"
+    (row.source === "mcp" || row.source === "openapi") &&
+    row.endpointConfig && typeof row.endpointConfig === "object"
       ? ((row.endpointConfig as { url?: string }).url ?? null)
       : null;
   return {
@@ -593,18 +913,28 @@ function summarizeConnection(
     scope: row.ownerUserId ? "user" : "organization",
     ownerUserId: row.ownerUserId,
     source: row.source,
+    systemManaged: row.systemKey !== null,
     label: row.label,
     endpoint,
     credentialMode: row.credentialMode,
     enabled: row.enabled,
     hasCredential: credentialFlags.has(row.id),
     catalogVersion: row.catalogVersion,
+    catalogChanged: row.catalogChanged,
+    health: {
+      status: row.healthStatus,
+      checkedAt: row.healthCheckedAt ? toIso(row.healthCheckedAt) : null,
+      errorCode: row.healthErrorCode
+    },
     createdAt: toIso(row.createdAt),
     updatedAt: toIso(row.updatedAt)
   };
 }
 
-function summarizeDefinition(row: ToolDefinitionRow): ToolDefinitionSummary {
+function summarizeDefinition(
+  row: ToolDefinitionRow,
+  connectionPolicy: unknown
+): ToolDefinitionSummary {
   return {
     id: row.id,
     connectionId: row.connectionId,
@@ -616,8 +946,26 @@ function summarizeDefinition(row: ToolDefinitionRow): ToolDefinitionSummary {
     outputSchema: row.outputSchema,
     annotations: row.annotations,
     definitionDigest: row.definitionDigest,
-    enabled: row.enabled
+    enabled: row.enabled,
+    policy: explainToolPolicy(row.annotations, connectionPolicy)
   };
+}
+
+async function updateConnectionHealth(
+  connectionId: string,
+  status: ToolConnectionHealth,
+  errorCode: string | null
+): Promise<void> {
+  await getDb()
+    .updateTable("toolConnections")
+    .set({
+      healthStatus: status,
+      healthCheckedAt: new Date(),
+      healthErrorCode: errorCode,
+      updatedAt: new Date()
+    })
+    .where("id", "=", connectionId)
+    .execute();
 }
 
 function toIso(value: unknown): string {

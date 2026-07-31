@@ -168,11 +168,13 @@ In managed mode, authorization is evaluated in this order:
 A user approval cannot expand the managed sandbox boundary. Permission bypass
 never bypasses Lush's containment policy.
 
-Harnesses retain their native code tools. Organization-scoped integrations,
-such as issue trackers and internal APIs, are exposed through `services/tools`
-over MCP or an adapter-specific bridge. Every call carries the session-context
-principal; the tools service owns authorization, redaction, audit logging,
-timeouts, and credential isolation.
+Harnesses retain their native code tools. Organization-governed and
+user-private integrations, such as issue trackers and internal APIs, are
+exposed through `services/tools` over MCP, OpenAPI, or an adapter-specific
+bridge. Every call carries the session-context principal; the tools service
+owns live authorization, approval, redaction, audit logging, timeouts, and
+credential isolation. An agent's selected tools can never expand the calling
+principal's effective authority.
 
 ## Compatibility is a product contract
 

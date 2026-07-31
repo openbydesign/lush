@@ -24,11 +24,40 @@ Domain services keep ownership of their own runtime logic:
   retention settings, archive/delete lifecycle, and the relationships used to
   delegate work from one session to another. See
   [Session orchestration](/docs/architecture/session-orchestration).
-- Agent owns coding-harness orchestration and execution contexts while leaving
-  native agent loops and model context with the selected harness. Lush's
-  target-neutral adapter and event contracts keep local and managed execution
-  behind the same client surface.
+- Agent owns immutable run configuration, durable `AgentRun` lifecycle and
+  events, single-writer leases, cancellation, recovery, and execution-provider
+  orchestration. For Code, the selected coding harness retains its native agent
+  loop and model context. See
+  [Managed agent runtime](/docs/architecture/managed-agent-runtime) and
+  [Coding harness orchestration](/docs/architecture/coding-harness-orchestration).
+- Tools owns connections, normalized definitions, encrypted credential
+  bindings, policy explanations, approvals, audited invocation, and connector
+  egress. It is the only path from a managed agent to an external tool. See
+  [Tool gateway](/docs/architecture/tool-gateway).
+- Inference owns organization-scoped providers, credentials, model discovery,
+  enabled models, defaults, and provider mediation. Agent owns the run; the
+  inference service owns access to the selected model.
 - Docs owns the local and hosted documentation site.
+
+## Runtime Flow
+
+First-party Chat creates a durable run before execution starts. The agent
+control plane resolves an immutable run bundle and attaches an execution
+environment. The runner owns the model loop; brokers keep credentials,
+authorization, durable state, and external side effects outside that
+environment.
+
+```text
+App/API -> agent control plane -> runner
+                                  |-- inference -> inference service
+                                  `-- tool call -> tool gateway -> connector
+```
+
+Run identity does not imply a heavyweight background environment. The current
+no-capability Chat path may use the local subprocess provider, but it still has
+durable events, idempotency, cancellation, and recovery. Capability-enabled
+runs require a production isolating provider; the subprocess provider is never
+that security boundary.
 
 ## State Ownership
 

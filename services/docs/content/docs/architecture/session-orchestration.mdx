@@ -35,6 +35,18 @@ state needed to resume that interaction. Chat, Code, and Work sessions use the
 same session abstraction even though their executors, event streams, tools,
 permissions, and presentation differ.
 
+An **agent run** is one durable execution within a session, normally one user
+turn. It owns the immutable configuration snapshot, ordered event stream,
+idempotency key, cancellation state, and terminal outcome for that execution.
+Every first-party Chat turn is a run; this is independent of whether the turn
+uses tools or executes in a heavyweight environment.
+
+An **agent environment** is the venue in which a run executes. Ordinary Chat
+uses an ephemeral environment. Code may bind many runs to one session
+environment so the repository, workspace, and native harness context persist
+between turns. Cancelling a run therefore does not necessarily destroy its
+session-bound environment.
+
 A **delegation** is a durable relationship from a parent session and
 originating message to a child session. Conceptually, it records:
 
@@ -133,6 +145,6 @@ architecture before asking a question.
 ## Non-goals
 
 This decision does not define the database schema, scheduling protocol, or
-agent event contract. It also does not require every Chat request to create a
-heavyweight background run. Simple requests retain a low-latency conversational
-path.
+agent event contract. It does not require every Chat run to use a heavyweight
+background environment. Simple requests retain a low-latency execution path
+while still receiving the same durable run identity and recovery guarantees.

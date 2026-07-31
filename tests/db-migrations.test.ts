@@ -28,7 +28,13 @@ test("database migration ids match their ordinal prefix", () => {
     "010_organization_invite_tokens",
     "011_inference_model_capabilities",
     "012_tool_gateway",
-    "013_agent_runs"
+    "013_agent_runs",
+    "014_tool_control_plane",
+    "015_tool_catalog_acknowledgment",
+    "016_tool_gateway_rollout_convergence",
+    "017_builtin_tool_connections",
+    "018_builtin_tool_enablement",
+    "019_retire_current_time_tool"
   ]);
 });
 
@@ -55,6 +61,59 @@ test("durable agent runs are append-only, scoped, and resumable", async () => {
 test("the built-in Lush revision digest matches its immutable instructions", () => {
   expect(createHash("sha256").update(builtinLushRevisionInstructions).digest("hex"))
     .toBe(builtinLushRevisionDigest);
+});
+
+test("tool health constraint repair is scoped to the active schema", async () => {
+  const migration = await Bun.file(
+    "packages/db/src/migrations/015_tool_catalog_acknowledgment.ts"
+  ).text();
+
+  expect(migration).toContain("namespace.nspname = current_schema()");
+  expect(migration).toContain("tool_connections_health_status_check");
+});
+
+test("tool gateway rollout convergence restores the organization flag", async () => {
+  const migration = await Bun.file(
+    "packages/db/src/migrations/016_tool_gateway_rollout_convergence.ts"
+  ).text();
+
+  expect(migration).toContain("alter table organizations");
+  expect(migration).toContain("add column if not exists tool_gateway_enabled");
+  expect(migration).toContain("boolean not null default false");
+});
+
+test("migration 017 materializes a singular built-in catalog", async () => {
+  const migration = await Bun.file(
+    "packages/db/src/migrations/017_builtin_tool_connections.ts"
+  ).text();
+
+  expect(migration).toContain("add column if not exists system_key text");
+  expect(migration).toContain("tool_connections_org_system_key_idx");
+  expect(migration).toContain("'lush_builtin'");
+  expect(migration).toContain("'Built-in tools'");
+  expect(migration).toContain("false,");
+});
+
+test("built-in availability is governed per tool", async () => {
+  const migration = await Bun.file(
+    "packages/db/src/migrations/018_builtin_tool_enablement.ts"
+  ).text();
+
+  expect(migration).toContain("update tool_connections");
+  expect(migration).toContain("set enabled = true");
+  expect(migration).toContain("update tool_definitions");
+  expect(migration).toContain("set enabled = false");
+  expect(migration).toContain("system_key = 'lush_builtin'");
+});
+
+test("the placeholder clock tool is retired append-only", async () => {
+  const migration = await Bun.file(
+    "packages/db/src/migrations/019_retire_current_time_tool.ts"
+  ).text();
+
+  expect(migration).toContain("delete from tool_definitions");
+  expect(migration).toContain("external_name = 'current_time'");
+  expect(migration).toContain("system_key = 'lush_builtin'");
 });
 
 test("model capabilities are added append-only as structured JSON", async () => {

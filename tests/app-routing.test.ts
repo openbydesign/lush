@@ -8,6 +8,7 @@ import {
   readProjectChatState,
   resolveRuntimeApiBaseUrl,
   routes,
+  settingsRoutes,
   sessionRouteHref
 } from "../apps/lush/src/lib/app-data";
 
@@ -15,6 +16,17 @@ test("help replaces concepts in the account navigation before sign out", () => {
   expect(accountRoutes.slice(-2).map((route) => [route.label, route.href])).toEqual([
     ["Help", "/concepts"],
     ["Sign out", "/sign-out"]
+  ]);
+});
+
+test("tool settings separate personal access from organization governance", () => {
+  expect(
+    settingsRoutes
+      .filter((route) => route.label.toLowerCase().includes("tool"))
+      .map((route) => [route.label, route.href])
+  ).toEqual([
+    ["My tools", "/settings/my-tools"],
+    ["Tool gateway", "/settings/tool-gateway"]
   ]);
 });
 

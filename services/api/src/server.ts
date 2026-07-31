@@ -99,13 +99,17 @@ import {
   updateSession
 } from "@lush/sessions/runtime";
 import {
+  acknowledgeConnectionCatalog,
   createToolConnection,
   deleteToolConnection,
   discoverConnectionCatalog,
+  getToolGatewaySettings,
   isToolGatewayEnabled,
   listToolConnections,
   listToolDefinitions,
   updateToolConnection,
+  updateToolDefinition,
+  updateToolGatewaySettings,
   ToolError,
   type ToolsPrincipal
 } from "@lush/tools/runtime";
@@ -1145,6 +1149,40 @@ app.patch(routePath("updateSessionSettings"), async (c) => {
   }
 });
 
+// Settings stay reachable while the rollout is disabled; otherwise an
+// administrator could not enable the gateway through the product surface.
+app.get(routePath("getToolGatewaySettings"), async (c) => {
+  const authorized = await authenticateAuthorized(c, "getToolGatewaySettings");
+  if ("response" in authorized) return authorized.response;
+  const principal = organizationPrincipal(authorized.auth.principal);
+  if (!principal) return organizationRequired(c);
+
+  try {
+    return c.json(await getToolGatewaySettings(toolsPrincipal(principal)));
+  } catch (error) {
+    return handleToolError(c, error, "Unable to load tool gateway settings");
+  }
+});
+
+app.post(routePath("updateToolGatewaySettings"), async (c) => {
+  const authorized = await authenticateAuthorized(c, "updateToolGatewaySettings");
+  if ("response" in authorized) return authorized.response;
+  const principal = organizationPrincipal(authorized.auth.principal);
+  if (!principal) return organizationRequired(c);
+
+  try {
+    const body = await c.req.json().catch(() => ({}));
+    return c.json(
+      await updateToolGatewaySettings(
+        toolsPrincipal(principal),
+        (body as { enabled?: unknown }).enabled
+      )
+    );
+  } catch (error) {
+    return handleToolError(c, error, "Unable to update tool gateway settings");
+  }
+});
+
 app.get(routePath("listToolConnections"), async (c) => {
   const authorized = await authenticateAuthorized(c, "listToolConnections");
   if ("response" in authorized) return authorized.response;
@@ -1230,6 +1268,22 @@ app.get(routePath("listToolDefinitions"), async (c) => {
   }
 });
 
+app.post(routePath("updateToolDefinition"), async (c) => {
+  const authorized = await authenticateAuthorized(c, "updateToolDefinition");
+  if ("response" in authorized) return authorized.response;
+  const principal = organizationPrincipal(authorized.auth.principal);
+  if (!principal) return organizationRequired(c);
+  const featureDisabled = await toolGatewayFeatureDisabled(c, principal.organizationId);
+  if (featureDisabled) return featureDisabled;
+
+  try {
+    const body = await c.req.json().catch(() => ({}));
+    return c.json(await updateToolDefinition(toolsPrincipal(principal), body));
+  } catch (error) {
+    return handleToolError(c, error, "Unable to update tool definition");
+  }
+});
+
 app.post(routePath("discoverToolCatalog"), async (c) => {
   const authorized = await authenticateAuthorized(c, "discoverToolCatalog");
   if ("response" in authorized) return authorized.response;
@@ -1247,6 +1301,26 @@ app.post(routePath("discoverToolCatalog"), async (c) => {
     return c.json({ definitions });
   } catch (error) {
     return handleToolError(c, error, "Unable to discover tools");
+  }
+});
+
+app.post(routePath("acknowledgeToolCatalog"), async (c) => {
+  const authorized = await authenticateAuthorized(c, "acknowledgeToolCatalog");
+  if ("response" in authorized) return authorized.response;
+  const principal = organizationPrincipal(authorized.auth.principal);
+  if (!principal) return organizationRequired(c);
+  const featureDisabled = await toolGatewayFeatureDisabled(c, principal.organizationId);
+  if (featureDisabled) return featureDisabled;
+
+  try {
+    return c.json(
+      await acknowledgeConnectionCatalog(
+        toolsPrincipal(principal),
+        connectionIdParam(c)
+      )
+    );
+  } catch (error) {
+    return handleToolError(c, error, "Unable to acknowledge tool catalog");
   }
 });
 
@@ -1688,6 +1762,7 @@ function readApiRuntimeConfig() {
     LUSH_AUTH_JWT_PUBLIC_KEYS: envSchema.optionalString(""),
     LUSH_AUTH_JWT_PUBLIC_KEY: envSchema.optionalString(""),
     LUSH_SECRET_KEY: envSchema.string(),
+    LUSH_TOOL_CREDENTIAL_KEY: envSchema.string(),
     LUSH_AUTH_PASSWORD_ENABLED: envSchema.boolean(true),
     LUSH_AUTH_PUBLIC_SIGNUP: envSchema.boolean(true),
     LUSH_PUBLIC_APP_URL: envSchema.optionalString(""),

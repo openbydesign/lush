@@ -1,0 +1,67 @@
+---
+title: Managed agent runtime
+description: Durable agent runs, execution environments, and the control-plane boundary.
+---
+
+## Durable run contract
+
+Every first-party Chat turn is an `AgentRun`. A session contains many runs, and
+a run normally corresponds to one user turn. Creating the run atomically binds
+the originating message, initiating principal, agent revision, model and
+context snapshot, capability digest, limits, and execution-provider kind.
+
+The server, not the browser, owns the turn lifecycle. It persists ordered
+events and the assistant result, enforces a single writer, and records terminal
+state. A client disconnect only detaches the event subscriber. Reconnecting
+with the last observed sequence resumes from the durable log, and retrying the
+same creation request with the same idempotency key reattaches to the original
+run instead of invoking the model twice.
+
+Run identity is separate from capability and execution venue. A no-tool Chat
+turn is still a run. The raw inference API remains a separate programmatic
+surface outside the Chat product and creates neither a session nor a run.
+
+## Run and environment lifecycles
+
+An `AgentEnvironment` is the execution venue, not the unit of conversation or
+audit. Ephemeral Chat environments are reclaimed after a run. A Code session
+can bind successive runs to one environment so its repository, workspace, and
+native harness state persist across turns.
+
+Cancelling a run stops its run-owned work and revokes its capabilities. It does
+not necessarily destroy a session-bound environment. Environment destruction
+is controlled separately by explicit termination, session lifecycle, policy,
+failure, or retention.
+
+## Control plane and runner
+
+The Agent service is a coordinator. It resolves the immutable run bundle,
+attaches an environment, maintains leases, appends the event log, and relays
+events. The runner owns the bounded model loop and any untrusted model or skill
+output. Inference, tool, artifact, and memory brokers retain credentials,
+authorization, and durable side effects outside the runner.
+
+The runner receives only the bounded inputs and capabilities needed by the
+run. It never receives database URLs, provider credentials, tool secrets,
+refresh tokens, signing keys, or ambient host environment variables.
+
+## Isolation state
+
+The current no-capability Lush Chat harness uses the subprocess provider. That
+provider exercises the production harness and streaming contract with an
+explicit environment allowlist, but it shares the host kernel, filesystem, and
+network and is not a production security boundary.
+
+Any capability-enabled managed-agent run must fail closed unless a production
+isolating provider is available. The planned provider preserves the same run,
+event, and harness contracts while adding per-environment identity, restricted
+filesystem and network access, bounded resources, and short-lived
+audience-bound broker capabilities.
+
+## First-token latency
+
+Durability does not require a background execution mode. The control plane can
+overlap environment attachment with independent context and capability
+preparation, but it does not start inference. The attached runner starts the
+inference request after receiving the immutable run bundle, preserving the
+model-loop boundary.

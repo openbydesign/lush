@@ -13,7 +13,24 @@ import {
 } from "./connectors/types";
 import { NativeConnector } from "./connectors/native";
 import { McpConnector } from "./connectors/mcp/client";
+import { OpenApiConnector, type OpenApiConfig } from "./connectors/openapi";
 import { defaultEgressPolicy, type EgressPolicy } from "./net/egress";
+
+const RESERVED_CREDENTIAL_HEADERS = new Set([
+  "connection",
+  "content-length",
+  "cookie",
+  "host",
+  "keep-alive",
+  "proxy-authenticate",
+  "proxy-authorization",
+  "set-cookie",
+  "te",
+  "trailer",
+  "transfer-encoding",
+  "upgrade"
+]);
+const HEADER_NAME_PATTERN = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
 
 export type McpEndpointConfig = {
   url: string;
@@ -59,11 +76,22 @@ export function buildConnector(options: BuildConnectorOptions): Connector {
     }
 
     case "openapi":
-      throw new ConnectorError(
-        "unsupported_source",
-        "OpenAPI connectors are not yet implemented",
-        501
-      );
+    {
+      const config = parseOpenApiConfig(connection.endpointConfig);
+      const headers: Record<string, string> = { ...(config.headers ?? {}) };
+      if (options.credential) {
+        const headerName = config.authHeader ?? "authorization";
+        const scheme = config.authScheme ?? "Bearer ";
+        headers[headerName.toLowerCase()] = `${scheme}${options.credential}`;
+      }
+      return new OpenApiConnector({
+        config,
+        headers,
+        egressPolicy: options.egressPolicy ?? defaultEgressPolicy(),
+        maxResponseBytes: options.maxResponseBytes ?? 1_000_000,
+        resolver: options.resolver
+      });
+    }
 
     default:
       throw new ConnectorError(
@@ -94,9 +122,54 @@ export function parseMcpConfig(raw: unknown): McpEndpointConfig {
   return {
     url: url.trim(),
     headers: sanitizeHeaders(config.headers),
-    authHeader: typeof config.authHeader === "string" ? config.authHeader : undefined,
+    authHeader: credentialHeaderName(config.authHeader),
     authScheme: typeof config.authScheme === "string" ? config.authScheme : undefined
   };
+}
+
+export function parseOpenApiConfig(raw: unknown): OpenApiConfig {
+  if (!raw || typeof raw !== "object") {
+    throw new ConnectorError(
+      "invalid_endpoint",
+      "OpenAPI connection is missing endpoint configuration",
+      400
+    );
+  }
+  const url = (raw as { url?: unknown }).url;
+  if (typeof url !== "string" || !url.trim()) {
+    throw new ConnectorError(
+      "invalid_endpoint",
+      "OpenAPI connection requires a document URL",
+      400
+    );
+  }
+  const config = raw as OpenApiConfig;
+  return {
+    url: url.trim(),
+    headers: sanitizeHeaders(config.headers),
+    authHeader: credentialHeaderName(config.authHeader),
+    authScheme: typeof config.authScheme === "string" ? config.authScheme : undefined
+  };
+}
+
+function credentialHeaderName(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string" || !HEADER_NAME_PATTERN.test(value)) {
+    throw new ConnectorError(
+      "invalid_endpoint",
+      "Credential header name is invalid",
+      400
+    );
+  }
+  const normalized = value.toLowerCase();
+  if (RESERVED_CREDENTIAL_HEADERS.has(normalized)) {
+    throw new ConnectorError(
+      "invalid_endpoint",
+      `Credential header is reserved and cannot be configured: ${value}`,
+      400
+    );
+  }
+  return normalized;
 }
 
 function sanitizeHeaders(

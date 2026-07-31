@@ -1,0 +1,71 @@
+---
+title: Tool gateway
+description: Governed tool connections, definitions, policy, and invocation.
+---
+
+`services/tools` is the only path from a managed agent to an external tool. It
+keeps integration credentials, live authorization, policy, approvals, network
+egress, and audit outside the model's execution environment.
+
+## Domain boundaries
+
+A **tool connection** configures an MCP server or OpenAPI document, its scope,
+endpoint, credential mode, health, catalog version, and connection-level
+policy. Connections can be shared by an organization or private to one user.
+
+A **tool definition** is one normalized capability discovered from a
+connection. It has a stable Lush identifier, model-facing name, input and
+output schemas, Lush-owned risk annotations, a content digest, and its own
+enabled state. One connection may expose many definitions; discovery never
+enables new definitions by implication.
+
+A **tool call** is one attributable invocation bound to the initiating
+principal and, for agent activity, the exact run. It records the definition and
+input digests, policy decision, approval state, idempotency key, outcome, and
+bounded result reference.
+
+Native Lush tools are code-owned definitions, not user-created connections.
+They appear as individual top-level organization tools and are disabled by
+default. The native registry is currently empty; a built-in is added only when
+it provides value beyond context already supplied to the agent.
+
+## Governance surfaces
+
+The organization **Tool gateway** controls the rollout state, shared
+connections, built-in tools, catalog review, and the maximum policy available
+to members. Organization changes require an administrator.
+
+**My tools** contains the current user's private connections and their view of
+organization tools available to them. Personal policy may impose stricter
+availability or approval requirements, but it cannot relax the organization
+ceiling. The current Phase 2 surface implements private connection management;
+persisted per-user overrides for shared tools remain to be added at this
+boundary. A shared connection may still use a credential bound to the calling
+user so the upstream system's own privilege boundary is preserved.
+
+## Three planes
+
+The control plane owns connection lifecycle, encrypted credential bindings,
+catalog discovery and acknowledgment, health, normalized definitions, and
+human-readable policy explanations.
+
+The invocation plane verifies the principal, run, connection, exact definition
+digest, normalized input, live policy, approval, budget, and idempotency key
+immediately before every call. It resolves credentials server-side, invokes the
+connector under time and byte bounds, normalizes the result, and persists an
+auditable outcome. An approval confirms one otherwise-authorized action; it
+cannot expand authorization or the environment boundary.
+
+The connector plane implements protocol-specific transport. MCP and OpenAPI
+traffic goes through SSRF-safe egress that requires HTTPS, validates and pins
+the resolved destination, blocks private and metadata addresses, rejects
+cross-origin redirects before forwarding credentials, and bounds buffered
+responses. External descriptions and risk annotations are untrusted hints;
+unreviewed remote definitions receive Lush's restrictive risk class.
+
+## Current integration state
+
+The control plane and direct test invocation use the production gateway path.
+Agent capability resolution, short-lived run capability tokens, and the
+provider-neutral model/tool loop are subsequent runtime phases. Until those
+land, configuring a connection does not expose it to the built-in Lush agent.

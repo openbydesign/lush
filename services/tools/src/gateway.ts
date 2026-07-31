@@ -35,6 +35,9 @@ import {
   type ToolsPrincipal
 } from "./runtime";
 import { validateInput } from "./validate";
+import { decideApproval } from "./policy";
+
+export { decideApproval } from "./policy";
 
 const logger = createLogger("@lush/tools");
 
@@ -255,6 +258,7 @@ export async function invokeTool(
       result = await connector.invoke({
         externalName: definition.externalName,
         input,
+        sourceMetadata: definition.sourceMetadata,
         limits,
         signal: invocationSignal,
         idempotencyKey: request.idempotencyKey
@@ -390,37 +394,6 @@ export async function decideToolApproval(
 }
 
 // ---------------------------------------------------------------------------
-
-type ApprovalDecision = "allow" | "approve" | "deny";
-
-/** Decide the approval class from Lush-owned policy plus untrusted hints. */
-export function decideApproval(
-  annotations: ToolAnnotations,
-  policy: unknown
-): ApprovalDecision {
-  const rules = isObject(policy) ? policy : {};
-  if (rules.deny === true) {
-    return "deny";
-  }
-  const approvalMode =
-    typeof rules.approval === "string" ? rules.approval : undefined;
-
-  if (approvalMode === "every_call") {
-    return "approve";
-  }
-  if (approvalMode === "never") {
-    return "allow";
-  }
-  // Default posture: read-only tools run without approval; destructive or
-  // open-world tools require explicit approval unless policy says otherwise.
-  if (annotations.destructive || annotations.openWorld) {
-    return "approve";
-  }
-  if (annotations.readOnly) {
-    return "allow";
-  }
-  return "allow";
-}
 
 async function requestApproval(params: {
   principal: ToolsPrincipal;

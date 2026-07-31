@@ -1,7 +1,9 @@
 export const toolsTypes = `
 export type ToolSource = "mcp" | "openapi" | "native";
+export type CreatableToolSource = "mcp" | "openapi";
 export type ToolConnectionScope = "organization" | "user";
 export type ToolCredentialMode = "none" | "organization" | "user_delegated";
+export type ToolConnectionHealth = "unknown" | "healthy" | "unhealthy";
 
 export type ToolConnection = {
   id: string;
@@ -9,12 +11,19 @@ export type ToolConnection = {
   scope: ToolConnectionScope;
   ownerUserId: string | null;
   source: ToolSource;
+  systemManaged: boolean;
   label: string;
   endpoint: string | null;
   credentialMode: ToolCredentialMode;
   enabled: boolean;
   hasCredential: boolean;
   catalogVersion: string | null;
+  catalogChanged: boolean;
+  health: {
+    status: ToolConnectionHealth;
+    checkedAt: string | null;
+    errorCode: string | null;
+  };
   createdAt: string;
   updatedAt: string;
 };
@@ -42,6 +51,10 @@ export type ToolDefinition = {
   annotations: unknown;
   definitionDigest: string;
   enabled: boolean;
+  policy: {
+    decision: "allow" | "approve" | "deny";
+    reasons: string[];
+  };
 };
 
 export type ListToolDefinitionsResponse = {
@@ -50,7 +63,7 @@ export type ListToolDefinitionsResponse = {
 
 export type CreateToolConnectionRequest = {
   scope: ToolConnectionScope;
-  source: ToolSource;
+  source: CreatableToolSource;
   label: string;
   endpoint?: { url?: string; headers?: Record<string, string> };
   credentialMode?: ToolCredentialMode;
@@ -62,10 +75,35 @@ export type UpdateToolConnectionRequest = {
   label?: string;
   enabled?: boolean;
   secret?: string | null;
+  policy?: {
+    deny?: boolean;
+    approval?: "default" | "never" | "every_call";
+  };
+};
+
+export type UpdateToolDefinitionRequest = {
+  definitionId: string;
+  enabled: boolean;
+};
+
+export type ToolGatewaySettings = {
+  enabled: boolean;
+  canManageOrganization: boolean;
+};
+
+export type UpdateToolGatewaySettingsRequest = {
+  enabled: boolean;
 };
 
 export type DeleteToolConnectionRequest = {
   connectionId: string;
+};
+
+export type AcknowledgeToolCatalogRequest = Record<string, never>;
+
+export type AcknowledgeToolCatalogResponse = {
+  connectionId: string;
+  catalogVersion: string;
 };
 
 export type DeletedToolConnection = {
@@ -117,6 +155,23 @@ export type DecideToolApprovalResponse = {
 
 export const toolsRoutes = [
   {
+    id: "getToolGatewaySettings",
+    method: "GET",
+    path: "/tools/settings",
+    responseType: "ToolGatewaySettings",
+    auth: true,
+    kind: "json"
+  },
+  {
+    id: "updateToolGatewaySettings",
+    method: "POST",
+    path: "/tools/settings",
+    requestType: "UpdateToolGatewaySettingsRequest",
+    responseType: "ToolGatewaySettings",
+    auth: true,
+    kind: "json"
+  },
+  {
     id: "listToolConnections",
     method: "GET",
     path: "/tools/connections",
@@ -160,10 +215,28 @@ export const toolsRoutes = [
     kind: "json"
   },
   {
+    id: "updateToolDefinition",
+    method: "POST",
+    path: "/tools/definitions/update",
+    requestType: "UpdateToolDefinitionRequest",
+    responseType: "ToolDefinition",
+    auth: true,
+    kind: "json"
+  },
+  {
     id: "discoverToolCatalog",
     method: "POST",
     path: "/tools/connections/:connectionId/discover",
     responseType: "ListToolDefinitionsResponse",
+    auth: true,
+    kind: "json"
+  },
+  {
+    id: "acknowledgeToolCatalog",
+    method: "POST",
+    path: "/tools/connections/:connectionId/catalog/acknowledge",
+    requestType: "AcknowledgeToolCatalogRequest",
+    responseType: "AcknowledgeToolCatalogResponse",
     auth: true,
     kind: "json"
   },

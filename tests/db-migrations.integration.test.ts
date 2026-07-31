@@ -3,6 +3,8 @@ import { sql } from "kysely";
 import { createIsolatedTestDatabase } from "../packages/db/src/test";
 import { sessionIpColumns } from "../packages/db/src/migrations/009_session_ip_columns";
 import { agentRuns } from "../packages/db/src/migrations/013_agent_runs";
+import { toolCatalogAcknowledgment } from "../packages/db/src/migrations/015_tool_catalog_acknowledgment";
+import { toolGatewayRolloutConvergence } from "../packages/db/src/migrations/016_tool_gateway_rollout_convergence";
 import { integrationDatabaseUrl } from "./integration-database";
 
 const databaseUrl = integrationDatabaseUrl();
@@ -59,12 +61,72 @@ if (!databaseUrl) {
         select conname
         from pg_constraint
         where conname in ('tool_calls_run_id_fkey', 'tool_approvals_run_id_fkey')
+          and connamespace = current_schema()::regnamespace
         order by conname
       `.execute(harness.db);
       expect(constraints.rows.map((row) => row.conname)).toEqual([
         "tool_approvals_run_id_fkey",
         "tool_calls_run_id_fkey"
       ]);
+    } finally {
+      await harness.destroy();
+    }
+  });
+
+  test("tool health constraint repair ignores a same-named constraint in another schema", async () => {
+    const harness = await createIsolatedTestDatabase(databaseUrl);
+
+    try {
+      await sql`
+        alter table tool_connections
+          drop constraint tool_connections_health_status_check;
+        create temporary table decoy_tool_connections (
+          health_status text constraint tool_connections_health_status_check
+            check (health_status <> '')
+        )
+      `.execute(harness.db);
+
+      await toolCatalogAcknowledgment.up(harness.db);
+
+      const constraints = await sql<{ conname: string }>`
+        select constraint_record.conname
+        from pg_constraint constraint_record
+        join pg_class relation on relation.oid = constraint_record.conrelid
+        join pg_namespace namespace on namespace.oid = relation.relnamespace
+        where constraint_record.conname = 'tool_connections_health_status_check'
+          and namespace.nspname = current_schema()
+      `.execute(harness.db);
+      expect(constraints.rows).toEqual([
+        { conname: "tool_connections_health_status_check" }
+      ]);
+    } finally {
+      await harness.destroy();
+    }
+  });
+
+  test("tool gateway rollout convergence repairs an already-recorded old schema", async () => {
+    const harness = await createIsolatedTestDatabase(databaseUrl);
+
+    try {
+      await sql`
+        alter table organizations drop column tool_gateway_enabled
+      `.execute(harness.db);
+
+      await toolGatewayRolloutConvergence.up(harness.db);
+
+      const columns = await sql<{
+        isNullable: string;
+        columnDefault: string | null;
+      }>`
+        select is_nullable, column_default
+        from information_schema.columns
+        where table_schema = current_schema()
+          and table_name = 'organizations'
+          and column_name = 'tool_gateway_enabled'
+      `.execute(harness.db);
+      expect(columns.rows).toHaveLength(1);
+      expect(columns.rows[0]?.isNullable).toBe("NO");
+      expect(columns.rows[0]?.columnDefault).toBe("false");
     } finally {
       await harness.destroy();
     }

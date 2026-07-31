@@ -11,6 +11,12 @@ import { organizationInviteTokens } from "./010_organization_invite_tokens";
 import { inferenceModelCapabilities } from "./011_inference_model_capabilities";
 import { toolGateway } from "./012_tool_gateway";
 import { agentRuns } from "./013_agent_runs";
+import { toolControlPlane } from "./014_tool_control_plane";
+import { toolCatalogAcknowledgment } from "./015_tool_catalog_acknowledgment";
+import { toolGatewayRolloutConvergence } from "./016_tool_gateway_rollout_convergence";
+import { builtinToolConnections } from "./017_builtin_tool_connections";
+import { builtinToolEnablement } from "./018_builtin_tool_enablement";
+import { retireCurrentTimeTool } from "./019_retire_current_time_tool";
 import type { Migration } from "./types";
 
 export const migrations: Migration[] = [
@@ -26,5 +32,11 @@ export const migrations: Migration[] = [
   organizationInviteTokens,
   inferenceModelCapabilities,
   toolGateway,
-  agentRuns
+  agentRuns,
+  toolControlPlane,
+  toolCatalogAcknowledgment,
+  toolGatewayRolloutConvergence,
+  builtinToolConnections,
+  builtinToolEnablement,
+  retireCurrentTimeTool
 ];

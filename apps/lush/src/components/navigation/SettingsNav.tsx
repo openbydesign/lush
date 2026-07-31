@@ -2,13 +2,10 @@ import { settingsRoutes } from "../../lib/app-data";
 import { Link, NavLink } from "react-router-dom";
 
 const personalSettings = settingsRoutes.filter(
-  (route) =>
-    route.href === "/settings/profile" || route.href === "/settings/appearance"
+  (route) => route.eyebrow === "Settings"
 );
-const organizationSettings = settingsRoutes.filter((route) =>
-  route.href.startsWith("/settings/") &&
-  route.href !== "/settings/profile" &&
-  route.href !== "/settings/appearance"
+const organizationSettings = settingsRoutes.filter(
+  (route) => route.eyebrow === "Organization settings"
 );
 
 export function SettingsNav(props: {
