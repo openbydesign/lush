@@ -10,6 +10,7 @@
       "devDependencies": {
         "@typescript/native-preview": "^7.0.0-dev.20260626.1",
         "dotenv": "^17.4.2",
+        "kysely": "^0.28.7",
       },
     },
     "apps/lush": {
@@ -109,6 +110,7 @@
         "@lush/inference": "workspace:*",
         "@lush/logging": "workspace:*",
         "@lush/sessions": "workspace:*",
+        "@lush/tools": "workspace:*",
       },
       "devDependencies": {
         "@types/node": "^24.0.0",
@@ -125,6 +127,7 @@
         "@lush/logging": "workspace:*",
         "@lush/notifications": "workspace:*",
         "@lush/sessions": "workspace:*",
+        "@lush/tools": "workspace:*",
         "hono": "^4.12.27",
       },
     },
@@ -212,6 +215,15 @@
     "services/tools": {
       "name": "@lush/tools",
       "version": "0.0.0",
+      "dependencies": {
+        "@lush/config": "workspace:*",
+        "@lush/db": "workspace:*",
+        "@lush/logging": "workspace:*",
+        "kysely": "^0.28.7",
+      },
+      "devDependencies": {
+        "@types/node": "^24.0.0",
+      },
     },
   },
   "packages": {

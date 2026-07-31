@@ -64,6 +64,7 @@ export type OrganizationsTable = {
   id: Generated<string>;
   name: string;
   slug: string;
+  toolGatewayEnabled: Generated<boolean>;
   createdAt: Timestamp;
   updatedAt: Timestamp;
 };
@@ -280,6 +281,110 @@ export type OrganizationSessionSettingsTable = {
   updatedAt: Timestamp;
 };
 
+export type ToolSource = "mcp" | "openapi" | "native";
+export type ToolCredentialMode = "none" | "organization" | "user_delegated";
+export type ToolCallStatus =
+  | "proposed"
+  | "waiting_for_approval"
+  | "running"
+  | "succeeded"
+  | "failed"
+  | "denied"
+  | "cancelled";
+export type ToolApprovalScope =
+  | "once"
+  | "once_per_run"
+  | "once_per_resource"
+  | "every_call";
+export type ToolApprovalStatus = "pending" | "approved" | "denied" | "expired";
+
+export type ToolAnnotations = {
+  readOnly: boolean;
+  destructive: boolean;
+  idempotent: boolean;
+  openWorld: boolean;
+};
+
+export type ToolConnectionsTable = {
+  id: Generated<string>;
+  organizationId: string;
+  ownerUserId: string | null;
+  source: ToolSource;
+  label: string;
+  endpointConfig: unknown;
+  credentialMode: ToolCredentialMode;
+  enabled: boolean;
+  policy: unknown;
+  catalogVersion: string | null;
+  createdAt: Timestamp;
+  updatedAt: Timestamp;
+};
+
+export type ToolCredentialBindingsTable = {
+  id: Generated<string>;
+  connectionId: string;
+  subjectUserId: string | null;
+  encryptedSecret: string;
+  createdAt: Timestamp;
+  updatedAt: Timestamp;
+};
+
+export type ToolDefinitionsTable = {
+  id: Generated<string>;
+  connectionId: string;
+  externalName: string;
+  qualifiedName: string;
+  title: string;
+  description: string;
+  inputSchema: unknown;
+  outputSchema: unknown | null;
+  annotations: ToolAnnotations;
+  definitionDigest: string;
+  enabled: boolean;
+  createdAt: Timestamp;
+  updatedAt: Timestamp;
+};
+
+export type ToolCallsTable = {
+  id: Generated<string>;
+  organizationId: string;
+  connectionId: string;
+  toolDefinitionId: string | null;
+  runId: string | null;
+  initiatedByUserId: string;
+  status: ToolCallStatus;
+  input: unknown;
+  inputDigest: string;
+  definitionDigest: string;
+  outputPreview: unknown | null;
+  outputRef: string | null;
+  isError: boolean;
+  policyDecision: unknown | null;
+  idempotencyKey: string | null;
+  errorCode: string | null;
+  errorMessage: string | null;
+  createdAt: Timestamp;
+  completedAt: Timestamp | null;
+};
+
+export type ToolApprovalsTable = {
+  id: Generated<string>;
+  organizationId: string;
+  toolCallId: string | null;
+  connectionId: string;
+  toolDefinitionId: string;
+  runId: string | null;
+  initiatedByUserId: string;
+  inputDigest: string;
+  definitionDigest: string;
+  scope: ToolApprovalScope;
+  status: ToolApprovalStatus;
+  decidedByUserId: string | null;
+  expiresAt: Timestamp;
+  createdAt: Timestamp;
+  decidedAt: Timestamp | null;
+};
+
 export type LushMigrationsTable = {
   id: string;
   appliedAt: Timestamp;
@@ -307,6 +412,11 @@ export type Database = {
   sessionStateSnapshots: SessionStateSnapshotsTable;
   sessionAttachments: SessionAttachmentsTable;
   organizationSessionSettings: OrganizationSessionSettingsTable;
+  toolConnections: ToolConnectionsTable;
+  toolCredentialBindings: ToolCredentialBindingsTable;
+  toolDefinitions: ToolDefinitionsTable;
+  toolCalls: ToolCallsTable;
+  toolApprovals: ToolApprovalsTable;
 };
 
 export type User = Selectable<UsersTable>;
@@ -322,3 +432,8 @@ export type SessionMessageRow = Selectable<SessionMessagesTable>;
 export type SessionStateSnapshotRow = Selectable<SessionStateSnapshotsTable>;
 export type InferenceProviderRow = Selectable<InferenceProvidersTable>;
 export type InferenceProviderModelRow = Selectable<InferenceProviderModelsTable>;
+export type ToolConnectionRow = Selectable<ToolConnectionsTable>;
+export type ToolCredentialBindingRow = Selectable<ToolCredentialBindingsTable>;
+export type ToolDefinitionRow = Selectable<ToolDefinitionsTable>;
+export type ToolCallRow = Selectable<ToolCallsTable>;
+export type ToolApprovalRow = Selectable<ToolApprovalsTable>;

@@ -307,7 +307,15 @@ export const authzActions = [
   "truncateSession",
   "archiveSession",
   "fetchSessionSettings",
-  "updateSessionSettings"
+  "updateSessionSettings",
+  "listToolConnections",
+  "createToolConnection",
+  "updateToolConnection",
+  "deleteToolConnection",
+  "listToolDefinitions",
+  "discoverToolCatalog",
+  "invokeTool",
+  "decideToolApproval"
 ] as const;
 
 export type AuthzAction = (typeof authzActions)[number];
@@ -358,7 +366,15 @@ export const roleActionBindings: Record<UserRole, readonly AuthzAction[]> = {
     "refreshInferenceProviderModels",
     "updateInferenceModel",
     "deleteInferenceProvider",
-    "updateInferenceModelDefault"
+    "updateInferenceModelDefault",
+    "listToolConnections",
+    "createToolConnection",
+    "updateToolConnection",
+    "deleteToolConnection",
+    "listToolDefinitions",
+    "discoverToolCatalog",
+    "invokeTool",
+    "decideToolApproval"
   ],
   user: [
     "fetchInferenceConfig",
@@ -380,7 +396,15 @@ export const roleActionBindings: Record<UserRole, readonly AuthzAction[]> = {
     "truncateSession",
     "archiveSession",
     "fetchSessionSettings",
-    "listOrganizationMembers"
+    "listOrganizationMembers",
+    "listToolConnections",
+    "createToolConnection",
+    "updateToolConnection",
+    "deleteToolConnection",
+    "listToolDefinitions",
+    "discoverToolCatalog",
+    "invokeTool",
+    "decideToolApproval"
   ]
 };
 

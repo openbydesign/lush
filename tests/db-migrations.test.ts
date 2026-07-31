@@ -21,7 +21,8 @@ test("database migration ids match their ordinal prefix", () => {
     "008_session_ip_retention",
     "009_session_ip_columns",
     "010_organization_invite_tokens",
-    "011_inference_model_capabilities"
+    "011_inference_model_capabilities",
+    "012_tool_gateway"
   ]);
 });
 

@@ -2,5 +2,23 @@
   "name": "@lush/tools",
   "version": "0.0.0",
   "private": true,
-  "type": "module"
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsgo --noEmit"
+  },
+  "dependencies": {
+    "@lush/config": "workspace:*",
+    "@lush/db": "workspace:*",
+    "@lush/logging": "workspace:*",
+    "kysely": "^0.28.7"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0"
+  },
+  "exports": {
+    "./spec": "./src/spec.ts",
+    "./runtime": "./src/runtime.ts",
+    "./gateway": "./src/gateway.ts",
+    "./connectors": "./src/connectors/index.ts"
+  }
 }
