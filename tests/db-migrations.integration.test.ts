@@ -4,6 +4,7 @@ import { createIsolatedTestDatabase } from "../packages/db/src/test";
 import { sessionIpColumns } from "../packages/db/src/migrations/009_session_ip_columns";
 import { agentRuns } from "../packages/db/src/migrations/013_agent_runs";
 import { toolCatalogAcknowledgment } from "../packages/db/src/migrations/015_tool_catalog_acknowledgment";
+import { toolGatewayRolloutConvergence } from "../packages/db/src/migrations/016_tool_gateway_rollout_convergence";
 import { integrationDatabaseUrl } from "./integration-database";
 
 const databaseUrl = integrationDatabaseUrl();
@@ -98,6 +99,34 @@ if (!databaseUrl) {
       expect(constraints.rows).toEqual([
         { conname: "tool_connections_health_status_check" }
       ]);
+    } finally {
+      await harness.destroy();
+    }
+  });
+
+  test("tool gateway rollout convergence repairs an already-recorded old schema", async () => {
+    const harness = await createIsolatedTestDatabase(databaseUrl);
+
+    try {
+      await sql`
+        alter table organizations drop column tool_gateway_enabled
+      `.execute(harness.db);
+
+      await toolGatewayRolloutConvergence.up(harness.db);
+
+      const columns = await sql<{
+        isNullable: string;
+        columnDefault: string | null;
+      }>`
+        select is_nullable, column_default
+        from information_schema.columns
+        where table_schema = current_schema()
+          and table_name = 'organizations'
+          and column_name = 'tool_gateway_enabled'
+      `.execute(harness.db);
+      expect(columns.rows).toHaveLength(1);
+      expect(columns.rows[0]?.isNullable).toBe("NO");
+      expect(columns.rows[0]?.columnDefault).toBe("false");
     } finally {
       await harness.destroy();
     }

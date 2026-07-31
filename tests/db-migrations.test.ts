@@ -30,7 +30,8 @@ test("database migration ids match their ordinal prefix", () => {
     "012_tool_gateway",
     "013_agent_runs",
     "014_tool_control_plane",
-    "015_tool_catalog_acknowledgment"
+    "015_tool_catalog_acknowledgment",
+    "016_tool_gateway_rollout_convergence"
   ]);
 });
 
@@ -66,6 +67,16 @@ test("tool health constraint repair is scoped to the active schema", async () =>
 
   expect(migration).toContain("namespace.nspname = current_schema()");
   expect(migration).toContain("tool_connections_health_status_check");
+});
+
+test("tool gateway rollout convergence restores the organization flag", async () => {
+  const migration = await Bun.file(
+    "packages/db/src/migrations/016_tool_gateway_rollout_convergence.ts"
+  ).text();
+
+  expect(migration).toContain("alter table organizations");
+  expect(migration).toContain("add column if not exists tool_gateway_enabled");
+  expect(migration).toContain("boolean not null default false");
 });
 
 test("model capabilities are added append-only as structured JSON", async () => {
