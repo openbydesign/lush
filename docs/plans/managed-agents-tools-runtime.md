@@ -34,12 +34,12 @@ horizontally scalable. First-token latency is protected by warm provider capacit
 
 The existing Lush chat becomes the first managed agent rather than remaining a
 special-case inference endpoint. From Phase 1 onward, every Chat product turn is
-a durable `AgentRun`, including a turn with no tools, memory, or skills. Run
-identity and execution venue are separate: the temporary no-capability exemption
-changes where that run's model loop may execute, not whether the turn receives
-durable events, idempotency, cancellation, and recovery. Programmatic consumers
-may still call the raw inference API outside Chat; those calls do not create a
-session or agent run.
+a durable `AgentRun`, including a turn with no tools, brokered memory, or
+executable skills. Run identity and execution venue are separate: the temporary
+no-capability exemption changes where that run's model loop may execute, not
+whether the turn receives durable events, idempotency, cancellation, and
+recovery. Programmatic consumers may still call the raw inference API outside
+Chat; those calls do not create a session or agent run.
 
 ```text
 App/API -> agent control plane -> isolated runner
@@ -888,7 +888,7 @@ later runs retrieve. Provenance is therefore an enforcement input, not merely a
 forensic aid.
 
 The implementable risk reduction is a run-level, transitive
-`untrusted_content_ingested` marker. It is set when a run consumes open-world tool
+`untrustedContentIngested` marker. It is set when a run consumes open-world tool
 output, attachments, user-designated imported/pasted documents, retrieved
 documents, or memory whose write provenance already carries the marker. Model
 transformation never clears it. An
@@ -1155,10 +1155,11 @@ memory writes, run cancellation, and administrative disable/revocation.
   acknowledgment retries the original call with the same idempotency key or
   abandons the run as failed and outcome-unknown.
 - A capability-enabled run — one that may invoke a tool, run an executable
-  skill, retrieve or write memory, or process tool/external output — executes
-  inside an isolating provider and fails closed if isolation or policy services
-  are unavailable. It never falls back to the `subprocess` provider or any
-  non-isolating path.
+  skill, use a runtime memory broker to retrieve or write memory, or process
+  tool/external output — executes inside an isolating provider and fails closed
+  if isolation or policy services are unavailable. It never falls back to the
+  `subprocess` provider or any non-isolating path. Server-assembled legacy
+  project context is an immutable run input, not a runtime memory capability.
 - The sole exemption is the execution venue for a no-capability Chat
   `AgentRun`, whose only untrusted output is model text relayed to the client —
   exactly the pre-agent risk posture, so it is not a regression. The turn still
@@ -1223,16 +1224,20 @@ streaming/ingress behavior in
 [#51](https://github.com/openbydesign/lush/issues/51).
 
 1. Introduce the AX-aligned `Harness` runtime seam and `AgentRun` orchestrator
-   (`services/agent/src/harness/`), driving the built-in Lush chat (no tools)
-   through the `subprocess` provider. Phase 1 is no-capability chat, so it ships
-   under the no-capability exemption (see Security invariants); the production
+   (`services/agent/src/harness/`), driving the built-in Lush chat (no tools,
+   executable skills, or brokered memory) through the `subprocess` provider.
+   Phase 1 retains today's server-assembled project context but exposes no memory
+   broker handle and cannot retrieve or write memory at runtime, so it ships under
+   the no-capability exemption (see Security invariants); the production
    isolating provider arrives in Phase 3. The orchestrator is the AX controller:
    it owns the `ConversationEvent` log, single-writer guard, and `Exec` stream.
 2. Replace the client-owned append/invoke/append sequence with server-owned run
    creation, assistant persistence, idempotency, cancellation, and resumable
    events.
-3. Resolve the built-in Lush revision, project instructions/memory/context, and
-   model policy through the new typed configuration pipeline.
+3. Resolve the built-in Lush revision, existing project instructions, legacy
+   project memory/context, and model policy into the immutable run bundle through
+   the new typed configuration pipeline; this is context assembly, not runtime
+   memory retrieval or writing.
 4. Move title generation behind an internal run/task purpose.
 
 Gate: functional parity for ordinary chat, no duplicate turns under retry,
@@ -1331,7 +1336,7 @@ organization, project, and agent ACLs; untrusted content cannot alter runtime
 policy; all writes are attributable and reversible according to retention
 policy; and **cross-run injection via memory is a tested threat**. Open-world
 tool output, attachments, identified document imports/pastes, retrieved
-documents, and transitively marked memory set `untrusted_content_ingested`; the
+documents, and transitively marked memory set `untrustedContentIngested`; the
 marker survives model transformation, and automatic writes from such a run
 degrade to reviewable proposals.
 
