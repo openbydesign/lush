@@ -44,6 +44,8 @@ test("durable agent runs are append-only, scoped, and resumable", async () => {
   expect(migration).toContain("configuration_digest text not null");
   expect(migration).toContain("agent_run_capabilities");
   expect(migration).toContain("agent_run_artifacts");
+  expect(migration).toContain("alter table tool_calls add column if not exists run_id uuid");
+  expect(migration).toContain("alter table tool_approvals add column if not exists run_id uuid");
   expect(migration).toContain("drop constraint if exists tool_calls_run_id_fkey");
   expect(migration).toContain("drop constraint if exists tool_approvals_run_id_fkey");
   expect(migration).toContain("validate constraint tool_calls_run_id_fkey");

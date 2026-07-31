@@ -307,6 +307,15 @@ export const agentRuns: Migration = {
       )
     `.execute(db);
 
+    // Migration 012 may already be recorded from a version that created these
+    // tables before durable-run bindings were added to its source definition.
+    await sql`
+      alter table tool_calls add column if not exists run_id uuid
+    `.execute(db);
+    await sql`
+      alter table tool_approvals add column if not exists run_id uuid
+    `.execute(db);
+
     await sql`
       update tool_calls tc
       set run_id = null
