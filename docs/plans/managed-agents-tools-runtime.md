@@ -301,7 +301,7 @@ type AgentRun = {
   installationRevisionIds: string[];
   environmentId: string;
   status: "queued" | "running" | "waiting_for_approval" |
-          "completed" | "failed" | "cancelled";
+          "needs_acknowledgment" | "completed" | "failed" | "cancelled";
   capabilityDigest: string;
   isolationProvider: string;   // provider kind, e.g. "subprocess"
   limits: AgentLimits;
@@ -466,9 +466,9 @@ control-plane endpoint; it never sends an approval token through model text.
 ## Sandboxed agent runtime
 
 The provider-neutral lifecycle is tracked in
-[#66](https://github.com/lush-agents/lush/issues/66); isolation, broker, and
+[#66](https://github.com/openbydesign/lush/issues/66); isolation, broker, and
 hosted Code security requirements are tracked in
-[#69](https://github.com/lush-agents/lush/issues/69).
+[#69](https://github.com/openbydesign/lush/issues/69).
 
 ### Boundary
 
@@ -556,6 +556,15 @@ a session-bound Code environment. Archiving, policy revocation, explicit hard
 termination, or retention expiry destroys that environment. Ephemeral chat
 environments are destroyed after the run.
 
+Process ownership is per run, even in a persistent environment. Processes a run
+spawns are reaped at that run's boundary (completion or cancellation); they do
+not leak into the next run. The one deliberate exception is an explicitly
+declared long-lived service — e.g. a Code preview/dev server the user asked to
+keep running across turns — which is owned by the environment, tracked as such,
+and torn down when the environment is destroyed. A run never inherits authority
+over another run's transient processes; this is the same orphan-reaping
+discipline the local sidecar owes, one level up.
+
 ### Execution model and scaling
 
 Every managed-agent run executes inside an `IsolationProvider` environment
@@ -584,6 +593,27 @@ subprocess children in development, paused microVMs or clean images in productio
 — so a run attaches to an already-hot environment within the TTFT budget instead
 of paying a cold provision. The measured warm-attach latency per provider sets
 the pool sizing and the TTFT SLO.
+
+#### Default chat once tools are enabled
+
+The no-capability chat fast path is a transitional convenience: once the
+built-in Lush agent enables tools (Phase 4), every default chat message is
+potentially agentic and must run in a provider, so all chat then pays warm-attach
+plus broker hops. That end state must hold the same first-token feel, so its
+shape is decided now (it constrains the Phase 1 orchestrator, not just Phase 3):
+
+- **Budget.** Warm-attach must fit inside an explicit per-turn TTFT budget
+  (target set in open decision 7). Warm-attach that cannot meet the budget is a
+  provider disqualifier, not something to paper over.
+- **Speculative parallel start.** The orchestrator begins the inference-broker
+  call and the environment attach concurrently rather than serializing them, so
+  first-token latency is `max(attach, first-inference-token)`, not their sum. The
+  Phase 1 orchestrator is structured for this even before tools exist.
+- **Empty-pool degradation.** When no warm environment is available (notably
+  during a deploy — a week-one event, not an edge case), the policy is explicit
+  and bounded: briefly queue against a deadline, cold-provision if within budget,
+  and otherwise fail closed with a retry-after signal. A capability-enabled run
+  never sheds to a non-isolating path to save latency.
 
 ### Run bundle
 
@@ -634,6 +664,17 @@ from the token and revalidate the run and live policy.
 Tokens are neither upstream OAuth tokens nor MCP access tokens. Token
 passthrough is forbidden.
 
+Runs outlive tokens. A session-bound Code run can span hours while its tokens
+stay short-lived, so renewal is by **re-mint, not by lengthening lifetime**: the
+control plane issues a fresh token when the current one nears expiry and delivers
+it to the environment through a dedicated broker-refresh channel (not model- or
+harness-authored text, and not by extending the original token's TTL). Each
+re-mint re-runs the live policy/membership/revocation check, so token lifetime
+stays the upper bound on how long a revoked capability can survive; refusing to
+re-mint is how cancellation and revocation take effect on a long-running
+environment. Long-lived tokens "for convenience" are prohibited precisely because
+they would widen that window and weaken the live-recheck guarantee.
+
 ### Hosted coding profile
 
 The managed runtime is also the missing execution target for hosted Code. It
@@ -677,13 +718,13 @@ and resume behavior. Local paths and local harness credentials are never
 uploaded or implied to work in hosted mode.
 
 The existing local adapter/runtime bugs
-[#14](https://github.com/lush-agents/lush/issues/14),
-[#15](https://github.com/lush-agents/lush/issues/15),
-[#16](https://github.com/lush-agents/lush/issues/16),
-[#17](https://github.com/lush-agents/lush/issues/17),
-[#18](https://github.com/lush-agents/lush/issues/18),
-[#19](https://github.com/lush-agents/lush/issues/19), and
-[#21](https://github.com/lush-agents/lush/issues/21) remain narrow hardening
+[#14](https://github.com/openbydesign/lush/issues/14),
+[#15](https://github.com/openbydesign/lush/issues/15),
+[#16](https://github.com/openbydesign/lush/issues/16),
+[#17](https://github.com/openbydesign/lush/issues/17),
+[#18](https://github.com/openbydesign/lush/issues/18),
+[#19](https://github.com/openbydesign/lush/issues/19), and
+[#21](https://github.com/openbydesign/lush/issues/21) remain narrow hardening
 prerequisites. They should not absorb the managed sandbox architecture.
 
 ## Agent Executor (AX) protocol alignment
@@ -717,7 +758,7 @@ durable decision; AX is one conforming implementation.
 | `agent_run_events` (sequenced) | `ConversationEvent{step}` append-only log | Monotonic per-conversation `step`; replay reconstructs state. |
 | `GET /runs/:id/events?after=<seq>` | `ExecRequest.last_step` catch-up | Replays missed events after reconnect without rewinding. |
 | Message parts (text/reasoning/tool/source) | `content.proto` `Content` oneof | text, thought, tool_call, tool_result, media, confirmation. |
-| Approval request/decision | `ConfirmationContent{question, approval/decline}` | Approval is a message content type, not an out-of-band channel. |
+| Approval request | `ConfirmationContent{question}` | The request is a message content type that flows through the event stream. The *decision* does NOT ride the stream: it is submitted to an authenticated control-plane endpoint (see Authorization and approval), never accepted in-band from model/harness text. |
 | Tool call / result | `ToolCallContent.id` ↔ `ToolResultContent.call_id` | Args/results are JSON structs; correlated by id. |
 | Environment lifecycle | Substrate actor `Create/Resume/Suspend` | Compute-layer control plane keyed by conversation id. |
 | Run status | `State{PENDING, COMPLETED, FAILED, CANCELED}` | Terminal state carried on `HarnessEnd` and completion events. |
@@ -739,6 +780,15 @@ durable decision; AX is one conforming implementation.
   last non-unspecified `state` is the current state; a `PENDING` tail means the
   last turn did not finish and is re-run. The bound `harness_id` is sticky —
   resuming with a different harness is rejected.
+- **Safe resume** = re-running a `PENDING` tail is only safe when the interrupted
+  turn had no ambiguous side effect. If the interrupted turn's log contains a
+  side-effecting tool call in a non-terminal state (a mutation reached `running`
+  but no `succeeded`/`failed` result landed), the run is NOT silently re-driven:
+  it transitions to a human-visible `needs_acknowledgment` ("outcome unknown")
+  status and requires an explicit decision to retry or abandon. This reconciles
+  AX's re-run rule with the invariant against implicit retry on ambiguous
+  outcome; it is the crashed-deploy-mid-mutation case and is a Phase 4 gate item
+  (the tool loop is what puts side-effecting calls in a run's log).
 - **Message model** = `Message{role, Content}` where `Content` is a single-arm
   oneof. Lush's normalized message parts are this content model. Tool calls and
   results correlate by `id`/`call_id`; arguments and results are JSON objects.
@@ -797,6 +847,15 @@ Each binding declares read, propose-write, or automatic-write behavior.
 Durable writes retain provenance, run id, author principal, and source. The
 current project `memory` text field can become the first project-memory source,
 but it should not become the generic long-term schema.
+
+Memory is a cross-run persistence channel, so the write side is a prompt-
+injection surface even though reads are already treated as data-not-authority: a
+run that processed hostile open-world tool output could deposit attacker-shaped
+content that every future run then retrieves, and provenance aids forensics, not
+prevention. The structural mitigation: an `automatic-write` binding degrades to
+`propose-write` for any run whose effective capability set included an open-world
+tool. Only a run that could not have ingested untrusted external content writes
+memory unattended; everything else surfaces a reviewable proposal.
 
 ## Inference changes
 
@@ -859,10 +918,10 @@ not a public prompt endpoint that bypasses managed-agent policy indefinitely.
 ## Persistence plan
 
 The durable run/environment contract is tracked in
-[#62](https://github.com/lush-agents/lush/issues/62). Durable object/artifact
+[#62](https://github.com/openbydesign/lush/issues/62). Durable object/artifact
 storage and authoritative usage accounting are tracked separately in
-[#57](https://github.com/lush-agents/lush/issues/57) and
-[#54](https://github.com/lush-agents/lush/issues/54).
+[#57](https://github.com/openbydesign/lush/issues/57) and
+[#54](https://github.com/openbydesign/lush/issues/54).
 
 Add append-only migrations for these logical groups:
 
@@ -964,10 +1023,10 @@ boundary.
 ## Observability and audit
 
 Runtime bootstrapping/export is tracked in
-[#68](https://github.com/lush-agents/lush/issues/68), boundary instrumentation
-and redaction in [#71](https://github.com/lush-agents/lush/issues/71), and the
+[#68](https://github.com/openbydesign/lush/issues/68), boundary instrumentation
+and redaction in [#71](https://github.com/openbydesign/lush/issues/71), and the
 optional collector profile in
-[#70](https://github.com/lush-agents/lush/issues/70).
+[#70](https://github.com/openbydesign/lush/issues/70).
 
 Use common identifiers across logs, traces, metrics, run events, and audits:
 
@@ -1002,8 +1061,12 @@ memory writes, run cancellation, and administrative disable/revocation.
 - No tool call executes without the original principal, active organization,
   run, agent revision, tool definition, and policy decision being known.
 - Agent, skill, model, memory, and tool content cannot grant authority.
-- User-scoped connection secrets and invocation rights never become visible to
-  another organization member through organization administration alone.
+- A user-bound credential (a user-scoped connection's secret, or a
+  `user_delegated` binding on an organization-owned connection) and the right to
+  invoke as that user never become visible to another organization member through
+  organization administration alone. Administering the connection that hosts a
+  delegated binding grants neither the secret nor the ability to invoke as its
+  subject.
 - Revocation and membership changes are enforced at invocation time.
 - Tool inputs and outputs are schema-checked and size-bounded; tool output is
   still treated as untrusted model input.
@@ -1014,27 +1077,34 @@ memory writes, run cancellation, and administrative disable/revocation.
 - Approval is bound to exact normalized arguments and expires.
 - Tool side effects use idempotency keys where supported and never retry
   implicitly when outcome is ambiguous.
-- Production capability-enabled runs fail closed if isolation or policy
-  services are unavailable.
-- Every run executes inside an isolating provider, where all untrusted model and
-  tool output is handled; a run fails closed if no isolating provider is
-  available.
+- A capability-enabled run — one that may invoke a tool, run an executable
+  skill, retrieve or write memory, or process tool/external output — executes
+  inside an isolating provider and fails closed if isolation or policy services
+  are unavailable. It never falls back to the `subprocess` provider or any
+  non-isolating path.
+- The sole exemption is a no-capability chat run, whose only untrusted output is
+  model text relayed to the client — exactly the pre-agent risk posture, so it is
+  not a regression. Such a run may use the `subprocess` provider (development) or
+  the direct inference path. This exemption is temporary and narrow: it ends when
+  the production isolating provider exists (Phase 3) and it never applies once the
+  built-in agent enables tools (Phase 4), after which every run is
+  capability-enabled and the rule above governs without exception.
 
 ## Related open issues
 
-[#72](https://github.com/lush-agents/lush/issues/72) is the cross-cutting
+[#72](https://github.com/openbydesign/lush/issues/72) is the cross-cutting
 production roadmap. The current issue map is:
 
 | Plan area | Open issues |
 | --- | --- |
-| Durable run, environment, event, and capability persistence | [#62](https://github.com/lush-agents/lush/issues/62) |
-| Provider-neutral sandbox/environment lifecycle | [#66](https://github.com/lush-agents/lush/issues/66) |
-| Sandbox isolation, broker capabilities, and hosted Code security | [#69](https://github.com/lush-agents/lush/issues/69) |
-| Temporal durable/background orchestration | [#63](https://github.com/lush-agents/lush/issues/63), [#64](https://github.com/lush-agents/lush/issues/64), [#65](https://github.com/lush-agents/lush/issues/65), [#67](https://github.com/lush-agents/lush/issues/67) |
-| Artifact storage and usage events | [#57](https://github.com/lush-agents/lush/issues/57), [#54](https://github.com/lush-agents/lush/issues/54) |
-| Streaming/ingress and forward-only migrations | [#51](https://github.com/lush-agents/lush/issues/51), [#52](https://github.com/lush-agents/lush/issues/52) |
-| OpenTelemetry | [#68](https://github.com/lush-agents/lush/issues/68), [#71](https://github.com/lush-agents/lush/issues/71), [#70](https://github.com/lush-agents/lush/issues/70) |
-| Existing local Code correctness/security prerequisites | [#14](https://github.com/lush-agents/lush/issues/14), [#15](https://github.com/lush-agents/lush/issues/15), [#16](https://github.com/lush-agents/lush/issues/16), [#17](https://github.com/lush-agents/lush/issues/17), [#18](https://github.com/lush-agents/lush/issues/18), [#19](https://github.com/lush-agents/lush/issues/19), [#21](https://github.com/lush-agents/lush/issues/21) |
+| Durable run, environment, event, and capability persistence | [#62](https://github.com/openbydesign/lush/issues/62) |
+| Provider-neutral sandbox/environment lifecycle | [#66](https://github.com/openbydesign/lush/issues/66) |
+| Sandbox isolation, broker capabilities, and hosted Code security | [#69](https://github.com/openbydesign/lush/issues/69) |
+| Temporal durable/background orchestration | [#63](https://github.com/openbydesign/lush/issues/63), [#64](https://github.com/openbydesign/lush/issues/64), [#65](https://github.com/openbydesign/lush/issues/65), [#67](https://github.com/openbydesign/lush/issues/67) |
+| Artifact storage and usage events | [#57](https://github.com/openbydesign/lush/issues/57), [#54](https://github.com/openbydesign/lush/issues/54) |
+| Streaming/ingress and forward-only migrations | [#51](https://github.com/openbydesign/lush/issues/51), [#52](https://github.com/openbydesign/lush/issues/52) |
+| OpenTelemetry | [#68](https://github.com/openbydesign/lush/issues/68), [#71](https://github.com/openbydesign/lush/issues/71), [#70](https://github.com/openbydesign/lush/issues/70) |
+| Existing local Code correctness/security prerequisites | [#14](https://github.com/openbydesign/lush/issues/14), [#15](https://github.com/openbydesign/lush/issues/15), [#16](https://github.com/openbydesign/lush/issues/16), [#17](https://github.com/openbydesign/lush/issues/17), [#18](https://github.com/openbydesign/lush/issues/18), [#19](https://github.com/openbydesign/lush/issues/19), [#21](https://github.com/openbydesign/lush/issues/21) |
 
 No dedicated issue yet covers the tool connection/gateway, managed-agent
 definition and installation model, provider-neutral inference tool loop,
@@ -1049,9 +1119,9 @@ recovery gates pass.
 
 ### Phase 0: contracts and migration spine
 
-Primary tracking: [#62](https://github.com/lush-agents/lush/issues/62), with
+Primary tracking: [#62](https://github.com/openbydesign/lush/issues/62), with
 forward-only migration enforcement in
-[#52](https://github.com/lush-agents/lush/issues/52).
+[#52](https://github.com/openbydesign/lush/issues/52).
 
 1. Add Lush-owned contracts for principals, managed agents, environments, runs,
    tool definitions, capability resolution, calls, results, approvals, and
@@ -1068,15 +1138,16 @@ cross-user, and role tests prove all new rows are scoped.
 
 ### Phase 1: durable Lush runs with no tools
 
-Primary tracking: [#62](https://github.com/lush-agents/lush/issues/62), with
+Primary tracking: [#62](https://github.com/openbydesign/lush/issues/62), with
 streaming/ingress behavior in
-[#51](https://github.com/lush-agents/lush/issues/51).
+[#51](https://github.com/openbydesign/lush/issues/51).
 
 1. Introduce the AX-aligned `Harness` runtime seam and `AgentRun` orchestrator
-   (`services/agent/src/harness/`), driving the built-in Lush chat through the
-   `subprocess` provider (a warm sandbox in production). The orchestrator is the
-   AX controller: it owns the `ConversationEvent` log, single-writer guard, and
-   `Exec` stream.
+   (`services/agent/src/harness/`), driving the built-in Lush chat (no tools)
+   through the `subprocess` provider. Phase 1 is no-capability chat, so it ships
+   under the no-capability exemption (see Security invariants); the production
+   isolating provider arrives in Phase 3. The orchestrator is the AX controller:
+   it owns the `ConversationEvent` log, single-writer guard, and `Exec` stream.
 2. Replace the client-owned append/invoke/append sequence with server-owned run
    creation, assistant persistence, idempotency, cancellation, and resumable
    events.
@@ -1105,8 +1176,8 @@ and revocation tests pass; direct test invocations use the production gateway.
 
 ### Phase 3: sandbox execution
 
-Primary tracking: [#66](https://github.com/lush-agents/lush/issues/66) and
-[#69](https://github.com/lush-agents/lush/issues/69).
+Primary tracking: [#66](https://github.com/openbydesign/lush/issues/66) and
+[#69](https://github.com/openbydesign/lush/issues/69).
 
 1. Add a production isolating provider (Cloudflare/Vercel sandbox, Substrate, or
    gVisor/Kata/microVM) behind the existing `IsolationProvider` interface (the
@@ -1176,14 +1247,17 @@ editing and eventual calling principals.
 Gate: a skill cannot self-grant a tool; memory retrieval and writes obey user,
 organization, project, and agent ACLs; untrusted content cannot alter runtime
 policy; all writes are attributable and reversible according to retention
-policy.
+policy; and **cross-run injection via memory is a tested threat** — content
+deposited by a run that processed open-world tool output cannot reach a later
+run's context as an automatic write (it degrades to a reviewable proposal per the
+memory-composition rule).
 
 ### Phase 7: delegation and background managed agents
 
-Primary tracking: [#63](https://github.com/lush-agents/lush/issues/63),
-[#64](https://github.com/lush-agents/lush/issues/64),
-[#65](https://github.com/lush-agents/lush/issues/65), and qualification in
-[#67](https://github.com/lush-agents/lush/issues/67).
+Primary tracking: [#63](https://github.com/openbydesign/lush/issues/63),
+[#64](https://github.com/openbydesign/lush/issues/64),
+[#65](https://github.com/openbydesign/lush/issues/65), and qualification in
+[#67](https://github.com/openbydesign/lush/issues/67).
 
 1. Connect managed agent runs to the parent/child session model in
    `docs/session-orchestration.md`.
@@ -1232,11 +1306,15 @@ before the relevant phase:
 4. Whether users may create private agents by default or organizations must
    enable the feature.
 5. Which memory writes are automatic for the built-in Lush agent versus shown
-   as proposals.
+   as proposals. Principled default: automatic only for a run whose effective
+   capability set had no open-world tool; otherwise propose (see the
+   memory-composition mitigation).
 6. The production isolation provider and latency SLO; the `IsolationProvider`
    interface allows this decision to be benchmark-driven.
-7. Warm provider pool sizing and the TTFT SLO — driven by measured warm-attach
-   latency per provider.
+7. The per-turn TTFT budget and warm-pool sizing, plus the empty-pool
+   degradation policy (queue / cold-provision / fail-with-retry-after). The
+   shape — speculative parallel start and warm-attach within budget — is fixed
+   (see Default chat once tools are enabled); the numbers are benchmark-driven.
 8. The retention split between transcripts, run event logs, tool payloads,
    artifacts, audit events, and derived memories.
 
