@@ -60,12 +60,28 @@ export async function decryptSecret(
       ciphertext: string;
     };
     const aad = new TextEncoder().encode(canonicalizeContext(context));
-    const candidates =
-      payload.v === 1 || payload.v === undefined
-        ? [await legacyKey()]
-        : payload.v === 2
-          ? (await keyRing()).filter((candidate) => candidate.id === payload.kid)
-          : [];
+    let candidates: DerivedKey[];
+    if (payload.v === 1 || payload.v === undefined) {
+      candidates = [await legacyKey()];
+    } else if (payload.v === 2) {
+      if (typeof payload.kid !== "string" || !payload.kid) {
+        throw new Error("Credential envelope is missing its key identifier");
+      }
+      candidates = (await keyRing()).filter(
+        (candidate) => candidate.id === payload.kid
+      );
+      if (candidates.length === 0) {
+        throw new SecretError(
+          "credential_key_unavailable",
+          "Stored tool credential requires a configured key that is not present in the active or previous credential key ring"
+        );
+      }
+    } else {
+      throw new SecretError(
+        "credential_envelope_unsupported",
+        "Stored tool credential uses an unsupported envelope version"
+      );
+    }
     for (const candidate of candidates) {
       try {
         const plaintext = await crypto.subtle.decrypt(
@@ -80,7 +96,11 @@ export async function decryptSecret(
       }
     }
     throw new Error("No configured credential key could decrypt the envelope");
-  } catch {
+  } catch (error) {
+    // Configuration and envelope-version failures require operator action.
+    // Do not turn them into a user-facing reconnect prompt: replacing the
+    // credential cannot recover ciphertext whose key was removed by mistake.
+    if (error instanceof SecretError) throw error;
     throw new SecretError(
       "credential_unavailable",
       "Stored tool credential could not be decrypted. Reconnect the tool connection.",
@@ -129,11 +149,13 @@ async function activeKey(): Promise<DerivedKey> {
 }
 
 async function keyRing(): Promise<DerivedKey[]> {
-  const roots = [
-    requiredEnvValue("LUSH_TOOL_CREDENTIAL_KEY"),
-    ...commaListEnv("LUSH_TOOL_CREDENTIAL_KEY_PREVIOUS")
-  ];
-  return Promise.all(Array.from(new Set(roots)).map(deriveKey));
+  const active = await activeKey();
+  const previous = await Promise.all(
+    Array.from(new Set(commaListEnv("LUSH_TOOL_CREDENTIAL_KEY_PREVIOUS"))).map(
+      deriveKey
+    )
+  );
+  return [active, ...previous.filter((candidate) => candidate.id !== active.id)];
 }
 
 async function deriveKey(root: string): Promise<DerivedKey> {

@@ -43,7 +43,7 @@ describe("tool credential envelope encryption", () => {
     const envelope = await encryptSecret("s3cr3t-token", context);
     await expect(
       decryptSecret(envelope, { connectionId: "conn-2", subjectUserId: "organization" })
-    ).rejects.toBeInstanceOf(SecretError);
+    ).rejects.toMatchObject({ code: "credential_unavailable", status: 409 });
   });
 
   test("decrypts regardless of context key insertion order (stable AAD)", async () => {
@@ -74,7 +74,10 @@ describe("tool credential envelope encryption", () => {
     const rewritten = await encryptSecret("rotate-me", context);
     expect(await secretEnvelopeNeedsRotation(rewritten)).toBe(false);
     delete process.env.LUSH_TOOL_CREDENTIAL_KEY_PREVIOUS;
-    await expect(decryptSecret(oldEnvelope, context)).rejects.toBeInstanceOf(SecretError);
+    await expect(decryptSecret(oldEnvelope, context)).rejects.toMatchObject({
+      code: "credential_key_unavailable",
+      status: 500
+    });
     expect(await decryptSecret(rewritten, context)).toBe("rotate-me");
   });
 
@@ -83,7 +86,10 @@ describe("tool credential envelope encryption", () => {
     process.env.LUSH_SECRET_KEY = "dedicated-root";
     const envelope = await encryptSecret("isolated", context);
     delete process.env.LUSH_TOOL_CREDENTIAL_KEY;
-    await expect(decryptSecret(envelope, context)).rejects.toBeInstanceOf(SecretError);
+    await expect(decryptSecret(envelope, context)).rejects.toMatchObject({
+      code: "secret_key_missing",
+      status: 500
+    });
   });
 
   test("rejects an unsupported envelope version even with a valid key id", async () => {
@@ -92,7 +98,10 @@ describe("tool credential envelope encryption", () => {
     envelope.v = 3;
     await expect(
       decryptSecret(JSON.stringify(envelope), context)
-    ).rejects.toBeInstanceOf(SecretError);
+    ).rejects.toMatchObject({
+      code: "credential_envelope_unsupported",
+      status: 500
+    });
   });
 });
 

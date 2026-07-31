@@ -320,6 +320,7 @@ export const authzActions = [
   "deleteToolConnection",
   "listToolDefinitions",
   "discoverToolCatalog",
+  "acknowledgeToolCatalog",
   "invokeTool",
   "decideToolApproval"
 ] as const;
@@ -385,6 +386,7 @@ export const roleActionBindings: Record<UserRole, readonly AuthzAction[]> = {
     "deleteToolConnection",
     "listToolDefinitions",
     "discoverToolCatalog",
+    "acknowledgeToolCatalog",
     "invokeTool",
     "decideToolApproval"
   ],
@@ -420,6 +422,7 @@ export const roleActionBindings: Record<UserRole, readonly AuthzAction[]> = {
     "deleteToolConnection",
     "listToolDefinitions",
     "discoverToolCatalog",
+    "acknowledgeToolCatalog",
     "invokeTool",
     "decideToolApproval"
   ]

@@ -497,6 +497,7 @@ export type ToolConnectionsTable = {
   enabled: boolean;
   policy: unknown;
   catalogVersion: string | null;
+  catalogAcknowledgedVersion: string | null;
   catalogChanged: boolean;
   healthStatus: ToolConnectionHealth;
   healthCheckedAt: Timestamp | null;

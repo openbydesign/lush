@@ -613,6 +613,13 @@ export type DeleteToolConnectionRequest = {
   connectionId: string;
 };
 
+export type AcknowledgeToolCatalogRequest = Record<string, never>;
+
+export type AcknowledgeToolCatalogResponse = {
+  connectionId: string;
+  catalogVersion: string;
+};
+
 export type DeletedToolConnection = {
   id: string;
 };
@@ -1184,6 +1191,15 @@ export const apiRoutes = [
     "kind": "json"
   },
   {
+    "id": "acknowledgeToolCatalog",
+    "method": "POST",
+    "path": "/v1beta/tools/connections/:connectionId/catalog/acknowledge",
+    "requestType": "AcknowledgeToolCatalogRequest",
+    "responseType": "AcknowledgeToolCatalogResponse",
+    "auth": true,
+    "kind": "json"
+  },
+  {
     "id": "invokeTool",
     "method": "POST",
     "path": "/v1beta/tools/connections/:connectionId/invoke",
@@ -1263,6 +1279,7 @@ const UPDATE_TOOL_CONNECTION_ROUTE = apiRoutes.find((route) => route.id === "upd
 const DELETE_TOOL_CONNECTION_ROUTE = apiRoutes.find((route) => route.id === "deleteToolConnection")!;
 const LIST_TOOL_DEFINITIONS_ROUTE = apiRoutes.find((route) => route.id === "listToolDefinitions")!;
 const DISCOVER_TOOL_CATALOG_ROUTE = apiRoutes.find((route) => route.id === "discoverToolCatalog")!;
+const ACKNOWLEDGE_TOOL_CATALOG_ROUTE = apiRoutes.find((route) => route.id === "acknowledgeToolCatalog")!;
 const INVOKE_TOOL_ROUTE = apiRoutes.find((route) => route.id === "invokeTool")!;
 const DECIDE_TOOL_APPROVAL_ROUTE = apiRoutes.find((route) => route.id === "decideToolApproval")!;
 
@@ -2550,6 +2567,28 @@ export async function discoverToolCatalog(
   }
 
   return response.json() as Promise<ListToolDefinitionsResponse>;
+}
+
+export async function acknowledgeToolCatalog(
+  apiBaseUrl: string,
+  connectionId: string,
+  sessionToken: string | undefined, body: AcknowledgeToolCatalogRequest
+) {
+  const response = await fetch(apiUrl(apiBaseUrl, routePath(ACKNOWLEDGE_TOOL_CATALOG_ROUTE.path, { connectionId })), {
+    method: "POST",
+    credentials: "include",
+    headers: {
+      ...authorizationHeaders(sessionToken),
+      "content-type": "application/json"
+    },
+    body: JSON.stringify(body)
+  });
+
+  if (!response.ok) {
+    throw await apiError("acknowledgeToolCatalog", response);
+  }
+
+  return response.json() as Promise<AcknowledgeToolCatalogResponse>;
 }
 
 export async function invokeTool(

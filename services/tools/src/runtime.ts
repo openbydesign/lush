@@ -33,7 +33,8 @@ import { digestValue } from "./digest";
 import {
   decryptSecret,
   encryptSecret,
-  secretEnvelopeNeedsRotation
+  secretEnvelopeNeedsRotation,
+  SecretError
 } from "./secrets";
 import {
   explainToolPolicy,
@@ -254,6 +255,7 @@ export async function createToolConnection(
         enabled: true,
         policy: {},
         catalogVersion: null,
+        catalogAcknowledgedVersion: null,
         catalogChanged: false,
         healthStatus: "unknown",
         healthCheckedAt: null,
@@ -470,12 +472,24 @@ export async function discoverConnectionCatalog(
         .execute();
     }
 
+    const current = await trx
+      .selectFrom("toolConnections")
+      .select(["catalogVersion", "catalogAcknowledgedVersion"])
+      .where("id", "=", connection.id)
+      .forUpdate()
+      .executeTakeFirstOrThrow();
+    // The first catalog is trusted as the connection's baseline. Later drift
+    // remains visible across refreshes until a manager explicitly acknowledges
+    // the exact observed version.
+    const acknowledgedVersion =
+      current.catalogAcknowledgedVersion ?? current.catalogVersion ?? catalogVersion;
+
     await trx
       .updateTable("toolConnections")
       .set({
         catalogVersion,
-        catalogChanged:
-          connection.catalogVersion !== null && connection.catalogVersion !== catalogVersion,
+        catalogAcknowledgedVersion: acknowledgedVersion,
+        catalogChanged: acknowledgedVersion !== catalogVersion,
         healthStatus: "healthy",
         healthCheckedAt: now,
         healthErrorCode: null,
@@ -486,6 +500,39 @@ export async function discoverConnectionCatalog(
   });
 
   return listToolDefinitions(principal, connection.id);
+}
+
+export async function acknowledgeConnectionCatalog(
+  principal: ToolsPrincipal,
+  connectionId: string
+): Promise<{ connectionId: string; catalogVersion: string }> {
+  const connection = await requireConnectionForManagement(principal, connectionId);
+  if (!connection.catalogVersion) {
+    throw new ToolError(
+      "catalog_unavailable",
+      "Discover the connection catalog before acknowledging it",
+      409
+    );
+  }
+
+  const result = await getDb()
+    .updateTable("toolConnections")
+    .set({
+      catalogAcknowledgedVersion: connection.catalogVersion,
+      catalogChanged: false,
+      updatedAt: new Date()
+    })
+    .where("id", "=", connection.id)
+    .where("catalogVersion", "=", connection.catalogVersion)
+    .executeTakeFirst();
+  if (result.numUpdatedRows !== 1n) {
+    throw new ToolError(
+      "catalog_changed",
+      "The catalog changed while it was being acknowledged; review the latest definitions",
+      409
+    );
+  }
+  return { connectionId: connection.id, catalogVersion: connection.catalogVersion };
 }
 
 // ---------------------------------------------------------------------------
@@ -580,18 +627,25 @@ export async function resolveCredential(
     connectionId: connection.id,
     subjectUserId: binding.subjectUserId ?? "organization"
   };
-  const plaintext = await decryptSecret(binding.encryptedSecret, context);
-  if (await secretEnvelopeNeedsRotation(binding.encryptedSecret)) {
-    await getDb()
-      .updateTable("toolCredentialBindings")
-      .set({
-        encryptedSecret: await encryptSecret(plaintext, context),
-        updatedAt: new Date()
-      })
-      .where("id", "=", binding.id)
-      .execute();
+  try {
+    const plaintext = await decryptSecret(binding.encryptedSecret, context);
+    if (await secretEnvelopeNeedsRotation(binding.encryptedSecret)) {
+      await getDb()
+        .updateTable("toolCredentialBindings")
+        .set({
+          encryptedSecret: await encryptSecret(plaintext, context),
+          updatedAt: new Date()
+        })
+        .where("id", "=", binding.id)
+        .execute();
+    }
+    return plaintext;
+  } catch (error) {
+    if (error instanceof SecretError) {
+      throw new ToolError(error.code, error.message, error.status, error);
+    }
+    throw error;
   }
-  return plaintext;
 }
 
 async function storeCredential(
@@ -603,10 +657,18 @@ async function storeCredential(
     now: Date;
   }
 ): Promise<void> {
-  const encryptedSecret = await encryptSecret(params.secret, {
-    connectionId: params.connectionId,
-    subjectUserId: params.subjectUserId ?? "organization"
-  });
+  let encryptedSecret: string;
+  try {
+    encryptedSecret = await encryptSecret(params.secret, {
+      connectionId: params.connectionId,
+      subjectUserId: params.subjectUserId ?? "organization"
+    });
+  } catch (error) {
+    if (error instanceof SecretError) {
+      throw new ToolError(error.code, error.message, error.status, error);
+    }
+    throw error;
+  }
 
   // Replace any existing binding for this (connection, subject). ON CONFLICT is
   // avoided because the uniqueness is enforced by two partial indexes (one for

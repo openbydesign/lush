@@ -10,6 +10,8 @@ import {
 import { safeFetch, type EgressPolicy } from "../net/egress";
 
 const SPEC_MAX_BYTES = 2_000_000;
+const SCHEMA_MAX_DEPTH = 32;
+const SCHEMA_MAX_NODES = 10_000;
 const HTTP_METHODS = ["get", "post", "put", "patch", "delete"] as const;
 const RESERVED_HEADERS = new Set([
   "authorization",
@@ -66,14 +68,6 @@ export class OpenApiConnector implements Connector {
     }
 
     const document = parseDocument(await readBoundedText(response, SPEC_MAX_BYTES));
-    const baseUrl = resolveBaseUrl(document, this.options.config.url);
-    if (new URL(baseUrl).origin !== new URL(this.options.config.url).origin) {
-      throw new ConnectorError(
-        "openapi_cross_origin_server",
-        "OpenAPI server URL must share the document origin so credentials cannot be forwarded cross-origin",
-        400
-      );
-    }
 
     const definitions: NormalizedToolDefinition[] = [];
     const names = new Set<string>();
@@ -83,6 +77,9 @@ export class OpenApiConnector implements Connector {
       for (const method of HTTP_METHODS) {
         if (!(method in pathItem)) continue;
         const operation = objectValue(resolveRef(document, pathItem[method]));
+        const servers =
+          operation.servers ?? pathItem.servers ?? document.servers;
+        const baseUrl = resolveBaseUrl(servers, this.options.config.url);
         const externalName = operationName(operation, method, path);
         if (names.has(externalName)) {
           throw new ConnectorError(
@@ -137,7 +134,7 @@ export class OpenApiConnector implements Connector {
           400
         );
       }
-      return encodeURIComponent(String(value));
+      return encodePathParameter(name, value);
     });
     if (!path.startsWith("/")) path = `/${path}`;
 
@@ -222,21 +219,39 @@ function parseDocument(text: string): Record<string, unknown> {
   return parsed as Record<string, unknown>;
 }
 
-function resolveBaseUrl(document: Record<string, unknown>, documentUrl: string): string {
-  const firstServer = objectValue(arrayValue(document.servers)[0]);
-  const serverUrl = stringValue(firstServer.url);
-  try {
-    return serverUrl
-      ? new URL(serverUrl, documentUrl).toString()
-      : new URL("/", documentUrl).toString();
-  } catch (cause) {
+function resolveBaseUrl(serversValue: unknown, documentUrl: string): string {
+  const declaredServers = arrayValue(serversValue);
+  if (declaredServers.length === 0) return new URL("/", documentUrl).toString();
+
+  const documentOrigin = new URL(documentUrl).origin;
+  const servers = declaredServers.map((value) => {
+    const serverUrl = stringValue(objectValue(value).url);
+    if (!serverUrl || /[{}]/.test(serverUrl)) {
+      throw new ConnectorError(
+        "invalid_openapi_server",
+        "OpenAPI server URL is invalid or contains unresolved variables",
+        400
+      );
+    }
+    try {
+      return new URL(serverUrl, documentUrl);
+    } catch (cause) {
+      throw new ConnectorError(
+        "invalid_openapi_server",
+        "OpenAPI server URL is invalid or contains unresolved variables",
+        400,
+        cause
+      );
+    }
+  });
+  if (servers.some((server) => server.origin !== documentOrigin)) {
     throw new ConnectorError(
-      "invalid_openapi_server",
-      "OpenAPI server URL is invalid or contains unresolved variables",
-      400,
-      cause
+      "openapi_cross_origin_server",
+      "Every OpenAPI server URL must share the document origin so credentials cannot be forwarded cross-origin",
+      400
     );
   }
+  return servers[0]!.toString();
 }
 
 function operationName(
@@ -317,26 +332,118 @@ function outputSchema(
 }
 
 function resolveSchema(document: Record<string, unknown>, value: unknown): JsonSchema {
-  return objectValue(resolveRef(document, value)) as JsonSchema;
+  const state = { nodes: 0, refs: new Set<string>() };
+  const resolved = resolveSchemaValue(document, value, state, 0);
+  if (!resolved || typeof resolved !== "object" || Array.isArray(resolved)) {
+    throw new ConnectorError(
+      "unsupported_openapi_schema",
+      "OpenAPI tool schemas must resolve to JSON Schema objects",
+      400
+    );
+  }
+  return resolved as JsonSchema;
 }
 
 function resolveRef(document: Record<string, unknown>, value: unknown): unknown {
-  const object = objectValue(value);
+  let current = value;
+  const seen = new Set<string>();
+  while (true) {
+    const ref = stringValue(objectValue(current).$ref);
+    if (!ref) return current;
+    if (seen.has(ref)) {
+      throw new ConnectorError("openapi_ref_cycle", `OpenAPI reference cycle: ${ref}`, 400);
+    }
+    seen.add(ref);
+    current = lookupLocalRef(document, ref);
+  }
+}
+
+function resolveSchemaValue(
+  document: Record<string, unknown>,
+  value: unknown,
+  state: { nodes: number; refs: Set<string> },
+  depth: number
+): unknown {
+  state.nodes += 1;
+  if (depth > SCHEMA_MAX_DEPTH || state.nodes > SCHEMA_MAX_NODES) {
+    throw new ConnectorError(
+      "openapi_schema_too_complex",
+      "OpenAPI schema exceeds the supported depth or size limit",
+      400
+    );
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => resolveSchemaValue(document, item, state, depth + 1));
+  }
+  if (!value || typeof value !== "object") return value;
+
+  const object = value as Record<string, unknown>;
   const ref = stringValue(object.$ref);
-  if (!ref) return value;
+  let target: Record<string, unknown> = object;
+  if (ref) {
+    if (state.refs.has(ref)) {
+      throw new ConnectorError("openapi_schema_cycle", `OpenAPI schema reference cycle: ${ref}`, 400);
+    }
+    state.refs.add(ref);
+    const resolved = resolveSchemaValue(
+      document,
+      lookupLocalRef(document, ref),
+      state,
+      depth + 1
+    );
+    state.refs.delete(ref);
+    if (!resolved || typeof resolved !== "object" || Array.isArray(resolved)) {
+      throw new ConnectorError(
+        "unsupported_openapi_schema",
+        `OpenAPI schema reference must resolve to an object: ${ref}`,
+        400
+      );
+    }
+    target = { ...(resolved as Record<string, unknown>), ...object };
+  }
+
+  const output = Object.create(null) as Record<string, unknown>;
+  for (const [key, child] of Object.entries(target)) {
+    if (key === "$ref") continue;
+    output[key] = resolveSchemaValue(document, child, state, depth + 1);
+  }
+  return output;
+}
+
+function lookupLocalRef(document: Record<string, unknown>, ref: string): unknown {
   if (!ref.startsWith("#/")) {
-    throw new ConnectorError("unsupported_openapi_ref", "Only local OpenAPI references are supported", 400);
+    throw new ConnectorError(
+      "unsupported_openapi_ref",
+      "Only local OpenAPI references are supported",
+      400
+    );
   }
   let current: unknown = document;
   for (const encoded of ref.slice(2).split("/")) {
     const segment = encoded.replace(/~1/g, "/").replace(/~0/g, "~");
     const object = objectValue(current);
     if (!Object.prototype.hasOwnProperty.call(object, segment)) {
-      throw new ConnectorError("invalid_openapi_ref", `OpenAPI reference was not found: ${ref}`, 400);
+      throw new ConnectorError(
+        "invalid_openapi_ref",
+        `OpenAPI reference was not found: ${ref}`,
+        400
+      );
     }
     current = object[segment];
   }
   return current;
+}
+
+function encodePathParameter(name: string, value: unknown): string {
+  const raw = scalarValue(value);
+  if (raw === "." || raw === ".." || /[%/\\]/.test(raw)) {
+    throw new ConnectorError(
+      "openapi_path_parameter_unsafe",
+      `OpenAPI path parameter cannot contain dot segments or encoded separators: ${name}`,
+      400
+    );
+  }
+  return encodeURIComponent(raw);
 }
 
 function parseSourceMetadata(value: unknown): OpenApiSourceMetadata {

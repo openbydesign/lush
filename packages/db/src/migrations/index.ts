@@ -12,6 +12,7 @@ import { inferenceModelCapabilities } from "./011_inference_model_capabilities";
 import { toolGateway } from "./012_tool_gateway";
 import { agentRuns } from "./013_agent_runs";
 import { toolControlPlane } from "./014_tool_control_plane";
+import { toolCatalogAcknowledgment } from "./015_tool_catalog_acknowledgment";
 import type { Migration } from "./types";
 
 export const migrations: Migration[] = [
@@ -28,5 +29,6 @@ export const migrations: Migration[] = [
   inferenceModelCapabilities,
   toolGateway,
   agentRuns,
-  toolControlPlane
+  toolControlPlane,
+  toolCatalogAcknowledgment
 ];

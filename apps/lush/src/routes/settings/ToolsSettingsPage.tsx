@@ -1,5 +1,6 @@
 import { useEffect, useState, type FormEvent } from "react";
 import {
+  acknowledgeToolCatalog,
   createToolConnection,
   decideToolApproval,
   deleteToolConnection,
@@ -122,6 +123,13 @@ export function ToolsSettingsPage(props: {
     );
     setDefinitions((current) => ({ ...current, [connection.id]: response.definitions }));
     setExpanded(connection.id);
+    await loadConnections();
+  });
+
+  const acknowledgeCatalog = (connection: ToolConnection) => run(`acknowledge:${connection.id}`, async () => {
+    await request((token) =>
+      acknowledgeToolCatalog(props.apiBaseUrl, connection.id, token, {})
+    );
     await loadConnections();
   });
 
@@ -277,11 +285,12 @@ export function ToolsSettingsPage(props: {
                     <div>
                       <div className="flex items-center gap-2"><h3 className="text-sm font-medium">{connection.label}</h3><Status connection={connection} /></div>
                       <p className="mt-1 text-xs text-[var(--color-muted)]">{connection.scope === "user" ? "Personal" : "Organization"} · {connection.source.toUpperCase()}{connection.endpoint ? ` · ${connection.endpoint}` : ""}</p>
-                      {connection.catalogChanged ? <p className="mt-1 text-xs text-amber-300">Catalog changed on the latest refresh. Review definition digests before reuse.</p> : null}
+                      {connection.catalogChanged ? <p className="mt-1 text-xs text-amber-300">Catalog changed. Review definition digests, then acknowledge this version.</p> : null}
                     </div>
                     <div className="flex gap-2">
                       <button type="button" onClick={() => void toggleExpanded(connection)} className={buttonClass}>{expanded === connection.id ? "Hide" : "Definitions"}</button>
                       {manageable ? <button type="button" onClick={() => void refreshCatalog(connection)} className={buttonClass}>Discover</button> : null}
+                      {manageable && connection.catalogChanged ? <button type="button" onClick={() => void acknowledgeCatalog(connection)} className={buttonClass}>Acknowledge</button> : null}
                       {manageable ? <button type="button" onClick={() => void toggleConnection(connection)} className={buttonClass}>{connection.enabled ? "Disable" : "Enable"}</button> : null}
                       {manageable ? <button type="button" onClick={() => void removeConnection(connection)} className={buttonClass}>Delete</button> : null}
                     </div>

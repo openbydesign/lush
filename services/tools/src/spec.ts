@@ -92,6 +92,13 @@ export type DeleteToolConnectionRequest = {
   connectionId: string;
 };
 
+export type AcknowledgeToolCatalogRequest = Record<string, never>;
+
+export type AcknowledgeToolCatalogResponse = {
+  connectionId: string;
+  catalogVersion: string;
+};
+
 export type DeletedToolConnection = {
   id: string;
 };
@@ -205,6 +212,15 @@ export const toolsRoutes = [
     method: "POST",
     path: "/tools/connections/:connectionId/discover",
     responseType: "ListToolDefinitionsResponse",
+    auth: true,
+    kind: "json"
+  },
+  {
+    id: "acknowledgeToolCatalog",
+    method: "POST",
+    path: "/tools/connections/:connectionId/catalog/acknowledge",
+    requestType: "AcknowledgeToolCatalogRequest",
+    responseType: "AcknowledgeToolCatalogResponse",
     auth: true,
     kind: "json"
   },

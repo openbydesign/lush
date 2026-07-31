@@ -4,6 +4,7 @@ import { createDb, closeDb, getDb } from "../packages/db/src/client";
 import { migrateToLatest } from "../packages/db/src/migrate";
 import { integrationDatabaseUrl } from "./integration-database";
 import {
+  acknowledgeConnectionCatalog,
   createToolConnection,
   deleteToolConnection,
   discoverConnectionCatalog,
@@ -364,6 +365,9 @@ if (!databaseUrl) {
       await expect(
         discoverConnectionCatalog(member, shared.id, new AbortController().signal)
       ).rejects.toMatchObject({ code: "forbidden" });
+      await expect(
+        acknowledgeConnectionCatalog(member, shared.id)
+      ).rejects.toMatchObject({ code: "forbidden" });
     });
 
     test("rejects secrets without a credential mode and plaintext endpoint headers", async () => {
@@ -528,6 +532,10 @@ if (!databaseUrl) {
           reasons: ["tool_destructive", "tool_open_world"]
         }
       });
+      expect(JSON.stringify(definitions[0]?.outputSchema)).not.toContain("$ref");
+      expect(definitions[0]?.outputSchema).toMatchObject({
+        properties: { owner: { properties: { name: { type: "string" } } } }
+      });
       expect((await listToolConnections(principal))[0]).toMatchObject({
         catalogChanged: false,
         health: { status: "healthy", errorCode: null }
@@ -551,11 +559,59 @@ if (!databaseUrl) {
         result: { structured: { id: "42", detail: true } }
       });
 
+      const traversalPending = await invokeTool(principal, {
+        connectionId: connection.id,
+        toolName: "getPet",
+        input: { path: { petId: ".." } }
+      });
+      expect(traversalPending.status).toBe("approval_required");
+      if (traversalPending.status !== "approval_required") return;
+      await decideToolApproval(
+        principal,
+        traversalPending.approval.approvalId,
+        true
+      );
+      const traversal = await invokeTool(principal, {
+        connectionId: connection.id,
+        toolName: "getPet",
+        input: { path: { petId: ".." } }
+      });
+      expect(traversal).toMatchObject({ status: "failed" });
+      expect(JSON.stringify(traversal)).toContain("openapi_path_parameter_unsafe");
+
       openApiVersion = 2;
       await discoverConnectionCatalog(principal, connection.id, new AbortController().signal);
       expect((await listToolConnections(principal))[0]?.catalogChanged).toBe(true);
       await discoverConnectionCatalog(principal, connection.id, new AbortController().signal);
+      expect((await listToolConnections(principal))[0]?.catalogChanged).toBe(true);
+      await acknowledgeConnectionCatalog(principal, connection.id);
       expect((await listToolConnections(principal))[0]?.catalogChanged).toBe(false);
+      await discoverConnectionCatalog(principal, connection.id, new AbortController().signal);
+      expect((await listToolConnections(principal))[0]?.catalogChanged).toBe(false);
+    });
+
+    test("OpenAPI discovery rejects cross-origin servers and cyclic schemas", async () => {
+      const principal = await seedPrincipal("admin");
+      for (const [variant, code] of [
+        ["cross-origin", "openapi_cross_origin_server"],
+        ["cycle", "openapi_schema_cycle"]
+      ] as const) {
+        const connection = await createToolConnection(principal, {
+          scope: "organization",
+          source: "openapi",
+          label: `Mock OpenAPI ${variant}`,
+          endpoint: {
+            url: `${endpoint.replace("/mcp", "/openapi.json")}?variant=${variant}`
+          }
+        });
+        await expect(
+          discoverConnectionCatalog(
+            principal,
+            connection.id,
+            new AbortController().signal
+          )
+        ).rejects.toMatchObject({ code });
+      }
     });
 
     test("an approval granted for one run does not authorize another run", async () => {
@@ -1064,10 +1120,31 @@ let openApiVersion = 1;
 async function mcpMock(request: Request): Promise<Response> {
   const url = new URL(request.url);
   if (url.pathname === "/openapi.json") {
+    const variant = url.searchParams.get("variant");
     return Response.json({
       openapi: "3.1.0",
       info: { title: "Mock", version: String(openApiVersion) },
-      servers: [{ url: url.origin }],
+      servers:
+        variant === "cross-origin"
+          ? [{ url: url.origin }, { url: "https://other.example" }]
+          : [{ url: url.origin }],
+      components: {
+        schemas: {
+          Owner: {
+            type: "object",
+            properties: { name: { type: "string" } }
+          },
+          Pet: {
+            type: "object",
+            properties: {
+              id: { type: "string" },
+              owner: { $ref: "#/components/schemas/Owner" }
+            }
+          },
+          CycleA: { $ref: "#/components/schemas/CycleB" },
+          CycleB: { $ref: "#/components/schemas/CycleA" }
+        }
+      },
       paths: {
         "/pets/{petId}": {
           get: {
@@ -1091,7 +1168,12 @@ async function mcpMock(request: Request): Promise<Response> {
                 description: "ok",
                 content: {
                   "application/json": {
-                    schema: { type: "object" }
+                    schema: {
+                      $ref:
+                        variant === "cycle"
+                          ? "#/components/schemas/CycleA"
+                          : "#/components/schemas/Pet"
+                    }
                   }
                 }
               }

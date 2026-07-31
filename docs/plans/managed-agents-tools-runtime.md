@@ -477,6 +477,13 @@ and `every_call`. Destructive or open-world calls default to explicit approval.
 An approval binds the normalized input digest, tool definition digest, run,
 principal, and expiration. Editing arguments invalidates the approval.
 
+The Phase 2 connection-level `never` setting is an explicit manager override of
+that default, including for destructive and open-world calls. Only the owner may
+set it on a private connection and only an organization administrator may set it
+on a shared connection. It removes the human confirmation step, not live
+authorization, definition/input binding, idempotency, or audit enforcement, and
+the settings surface must present the destructive-call consequence clearly.
+
 The gateway returns `approval_required` rather than letting a sandbox invent a
 consent prompt. `services/agent` persists the paused run and streams an approval
 event to the client. The client submits the decision to an authenticated
@@ -1252,7 +1259,8 @@ credential key separation and rotation in
 [#103](https://github.com/openbydesign/lush/issues/103).
 
 1. Implement organization and user connections, encrypted credential refs,
-   normalized definitions, health, catalog versions, and policy explanations.
+   normalized definitions, health, catalog versions, persistent catalog-change
+   review until a manager acknowledges the exact version, and policy explanations.
 2. Implement one native read-only tool and one remote MCP Streamable HTTP
    connection. Add OpenAPI import after the normalized contract is exercised by
    both native and MCP sources.
@@ -1395,7 +1403,8 @@ before the relevant phase:
    connections or only specific source/risk classes.
 2. Whether organization-shared connections initially support only service
    credentials or also per-user OAuth bindings under one shared connection.
-3. Which approval choices may be remembered and for how long.
+3. Which approval choices other than the explicit connection-level `never`
+   override may be remembered and for how long.
 4. Whether users may create private agents by default or organizations must
    enable the feature.
 5. Which memory writes are automatic for the built-in Lush agent versus shown

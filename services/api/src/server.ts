@@ -99,6 +99,7 @@ import {
   updateSession
 } from "@lush/sessions/runtime";
 import {
+  acknowledgeConnectionCatalog,
   createToolConnection,
   deleteToolConnection,
   discoverConnectionCatalog,
@@ -1283,6 +1284,26 @@ app.post(routePath("discoverToolCatalog"), async (c) => {
     return c.json({ definitions });
   } catch (error) {
     return handleToolError(c, error, "Unable to discover tools");
+  }
+});
+
+app.post(routePath("acknowledgeToolCatalog"), async (c) => {
+  const authorized = await authenticateAuthorized(c, "acknowledgeToolCatalog");
+  if ("response" in authorized) return authorized.response;
+  const principal = organizationPrincipal(authorized.auth.principal);
+  if (!principal) return organizationRequired(c);
+  const featureDisabled = await toolGatewayFeatureDisabled(c, principal.organizationId);
+  if (featureDisabled) return featureDisabled;
+
+  try {
+    return c.json(
+      await acknowledgeConnectionCatalog(
+        toolsPrincipal(principal),
+        connectionIdParam(c)
+      )
+    );
+  } catch (error) {
+    return handleToolError(c, error, "Unable to acknowledge tool catalog");
   }
 });
 
