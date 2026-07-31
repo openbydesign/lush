@@ -15,6 +15,7 @@ export type AgentChatMessage = InferenceChatMessage & {
 };
 
 export type ProjectAgentContext = {
+  id?: string;
   name: string;
   instructions: string;
   memory: string;
@@ -23,6 +24,7 @@ export type ProjectAgentContext = {
 
 export type StreamLushAgentChatOptions = {
   organizationId: string;
+  instructions?: string;
   modelSelection?: string;
   messages: AgentChatMessage[];
   project?: ProjectAgentContext;
@@ -39,6 +41,7 @@ export function getLushAgentMetadata() {
 
 export async function* streamLushAgentChat({
   organizationId,
+  instructions,
   modelSelection,
   messages,
   project,
@@ -47,7 +50,7 @@ export async function* streamLushAgentChat({
   yield* streamInferenceChat({
     organizationId,
     modelSelection,
-    systemPrompt: projectSystemPrompt(lushAgent.systemPrompt, project),
+    systemPrompt: projectSystemPrompt(instructions ?? lushAgent.systemPrompt, project),
     messages: messages.map(toInferenceMessage),
     signal
   });

@@ -453,6 +453,7 @@ export async function fetchSession(
       .selectFrom("sessionMessages")
       .selectAll()
       .where("threadId", "=", thread.id)
+      .where("supersededAt", "is", null)
       .orderBy("createdAt", "asc")
       .orderBy("id", "asc")
       .execute(),
@@ -673,6 +674,7 @@ export async function truncateSession(
         .selectFrom("sessionMessages")
         .selectAll()
         .where("threadId", "=", thread.id)
+        .where("supersededAt", "is", null)
         .orderBy("createdAt", "asc")
         .orderBy("id", "asc")
         .execute(),
@@ -695,7 +697,8 @@ export async function truncateSession(
 
     if (removedMessages.length > 0) {
       await trx
-        .deleteFrom("sessionMessages")
+        .updateTable("sessionMessages")
+        .set({ supersededAt: new Date() })
         .where("id", "in", removedMessages.map((message) => message.id))
         .execute();
     }

@@ -31,6 +31,97 @@ export function echoHarness(id = "echo"): Harness {
   };
 }
 
+type BrokeredLushConfig = {
+  brokerUrl: string;
+  capabilityToken: string;
+  configurationDigest: string;
+  configuration: unknown;
+};
+
+/**
+ * Phase 1's built-in Lush harness. The child owns the turn and receives an
+ * immutable run bundle plus one short-lived, run-bound inference capability;
+ * it never receives an upstream provider credential.
+ */
+export function brokeredLushHarness(id = "lush-brokered"): Harness {
+  return {
+    id,
+    async *connect(request, signal): AsyncIterable<HarnessResponse> {
+      const config = normalizeBrokeredConfig(request.harnessConfig);
+      const response = await fetch(config.brokerUrl, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${config.capabilityToken}`,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          configurationDigest: config.configurationDigest,
+          configuration: config.configuration
+        }),
+        signal
+      });
+      if (!response.ok || !response.body) {
+        throw new Error(`Inference broker rejected the run (${response.status})`);
+      }
+
+      const decoder = new TextDecoder();
+      let buffer = "";
+      for await (const chunk of response.body as AsyncIterable<Uint8Array>) {
+        buffer += decoder.decode(chunk, { stream: true });
+        let newline = buffer.indexOf("\n");
+        while (newline >= 0) {
+          const line = buffer.slice(0, newline).trim();
+          buffer = buffer.slice(newline + 1);
+          if (line) {
+            const delta = parseBrokerDelta(line);
+            if (delta) {
+              yield {
+                type: "outputs",
+                messages: [textMessage("assistant", delta)]
+              };
+            }
+          }
+          newline = buffer.indexOf("\n");
+        }
+      }
+      const tail = buffer.trim();
+      if (tail) {
+        const delta = parseBrokerDelta(tail);
+        if (delta) {
+          yield { type: "outputs", messages: [textMessage("assistant", delta)] };
+        }
+      }
+      yield { type: "end", state: "completed" };
+    }
+  };
+}
+
+function normalizeBrokeredConfig(value: unknown): BrokeredLushConfig {
+  if (!value || typeof value !== "object") {
+    throw new Error("Brokered Lush harness configuration is required");
+  }
+  const candidate = value as Partial<BrokeredLushConfig>;
+  if (
+    typeof candidate.brokerUrl !== "string" ||
+    !candidate.brokerUrl.startsWith("http://127.0.0.1:") ||
+    typeof candidate.capabilityToken !== "string" ||
+    candidate.capabilityToken.length < 32 ||
+    typeof candidate.configurationDigest !== "string" ||
+    candidate.configuration === undefined
+  ) {
+    throw new Error("Brokered Lush harness configuration is invalid");
+  }
+  return candidate as BrokeredLushConfig;
+}
+
+function parseBrokerDelta(line: string): string {
+  const value = JSON.parse(line) as { delta?: unknown };
+  if (!value || typeof value.delta !== "string") {
+    throw new Error("Inference broker returned an invalid event");
+  }
+  return value.delta;
+}
+
 export type ToolCallingHarnessOptions = {
   id?: string;
   executor: ThirdPartyExecutor;

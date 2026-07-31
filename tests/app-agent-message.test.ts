@@ -3,7 +3,8 @@ import {
   appendAgentStreamEvent,
   chatMessageFromSession,
   chatMessageMetadata,
-  readAgentEventStream
+  readAgentEventStream,
+  readAgentRunEventStream
 } from "../apps/lush/src/lib/agent-message";
 import type { ChatMessagePart } from "../apps/lush/src/lib/types";
 
@@ -71,5 +72,29 @@ describe("app agent message parts", () => {
       { type: "text-delta", delta: "hello" },
       { type: "response-complete" }
     ]);
+  });
+
+  test("parses durable run event envelopes across chunk boundaries", async () => {
+    const encoder = new TextEncoder();
+    const response = new Response(new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode(
+          '{"runId":"run-1","sequence":1,"type":"run-start","pay'
+        ));
+        controller.enqueue(encoder.encode(
+          'load":{"originMessageId":"message-1"},"createdAt":"2026-07-30T00:00:00Z"}\n'
+        ));
+        controller.close();
+      }
+    }));
+    const events: unknown[] = [];
+    await readAgentRunEventStream(response, (event) => events.push(event));
+    expect(events).toEqual([{
+      runId: "run-1",
+      sequence: 1,
+      type: "run-start",
+      payload: { originMessageId: "message-1" },
+      createdAt: "2026-07-30T00:00:00Z"
+    }]);
   });
 });

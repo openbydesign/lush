@@ -12,7 +12,7 @@
 
 import { envValue } from "@lush/config/env";
 import { textMessage } from "./content";
-import { echoHarness } from "./harnesses";
+import { brokeredLushHarness, echoHarness } from "./harnesses";
 import type { Harness, HarnessResponse, HarnessStart } from "./protocol";
 
 /**
@@ -54,6 +54,8 @@ function resolveHarness(id: string): Harness {
       return envProbeHarness();
     case "block":
       return blockHarness();
+    case "lush-brokered":
+      return brokeredLushHarness();
     case "echo":
     default:
       return echoHarness(id || "echo");

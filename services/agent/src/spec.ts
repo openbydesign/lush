@@ -51,9 +51,88 @@ export type AgentPromptRequest = {
   modelSelection: string;
   messages: AgentChatMessage[];
 };
+
+export type AgentRunStatus = "queued" | "running" | "waiting_for_approval" |
+  "needs_acknowledgment" | "completed" | "failed" | "cancelled";
+
+export type AgentRun = {
+  id: string;
+  organizationId: string;
+  sessionId: string;
+  originMessageId: string;
+  assistantMessageId: string | null;
+  initiatedByUserId: string;
+  agentRevisionId: string;
+  environmentId: string;
+  status: AgentRunStatus;
+  purpose: "chat" | "title";
+  idempotencyKey: string;
+  capabilityDigest: string;
+  configurationDigest: string;
+  isolationProvider: string;
+  untrustedContentIngested: boolean;
+  modelSelection: string;
+  errorCode: string | null;
+  errorMessage: string | null;
+  createdAt: string;
+  updatedAt: string;
+  startedAt: string | null;
+  completedAt: string | null;
+  cancelledAt: string | null;
+};
+
+export type CreateAgentRunRequest = {
+  idempotencyKey: string;
+  originMessageId?: string;
+  modelSelection?: string;
+  message: AgentChatMessage;
+  metadata?: unknown;
+};
+
+export type AgentRunEvent = {
+  runId: string;
+  sequence: number;
+  type: string;
+  payload: unknown;
+  createdAt: string;
+};
 `;
 
 export const agentRoutes = [
+  {
+    id: "createAgentRun",
+    method: "POST",
+    path: "/sessions/:sessionId/runs",
+    requestType: "CreateAgentRunRequest",
+    responseType: "Response",
+    auth: true,
+    kind: "stream"
+  },
+  {
+    id: "fetchAgentRun",
+    method: "GET",
+    path: "/runs/:runId",
+    responseType: "AgentRun",
+    auth: true,
+    kind: "json"
+  },
+  {
+    id: "streamAgentRunEvents",
+    method: "GET",
+    path: "/runs/:runId/events",
+    responseType: "Response",
+    auth: true,
+    kind: "stream"
+  },
+  {
+    id: "cancelAgentRun",
+    method: "POST",
+    path: "/runs/:runId/cancel",
+    requestType: "Record<string, never>",
+    responseType: "AgentRun",
+    auth: true,
+    kind: "json"
+  },
   {
     id: "streamAgentChat",
     method: "POST",

@@ -1,7 +1,7 @@
 {
   "openapi": "3.1.0",
   "info": {
-    "title": "Agents API",
+    "title": "Runs API",
     "version": "0.0.0",
     "description": "HTTP API for authentication, organization-scoped inference configuration, and agent runtime requests."
   },
@@ -12,18 +12,18 @@
   ],
   "tags": [
     {
-      "name": "agents",
-      "description": "Agent runtime invocation routes."
+      "name": "runs",
+      "description": "Runs routes."
     }
   ],
   "paths": {
-    "/v1beta/agents/{agentSlug}/chat": {
-      "post": {
-        "summary": "Stream agent chat",
-        "description": "Streams typed newline-delimited events from the agent identified by `agentSlug`, using persisted session messages plus a deduplicated client message snapshot as context.",
-        "operationId": "streamAgentChat",
+    "/v1beta/runs/{runId}": {
+      "get": {
+        "summary": "Get agent run",
+        "description": "Returns an owned durable run and its terminal or active state.",
+        "operationId": "fetchAgentRun",
         "tags": [
-          "agents"
+          "runs"
         ],
         "security": [
           {
@@ -32,34 +32,22 @@
         ],
         "parameters": [
           {
-            "name": "agentSlug",
+            "name": "runId",
             "in": "path",
             "required": true,
-            "description": "Unique agent slug, such as `lush` for the built-in agent.",
+            "description": "Agent run identifier.",
             "schema": {
               "type": "string"
             }
           }
         ],
-        "requestBody": {
-          "required": true,
-          "description": "Model selection, session id, and client message snapshot.",
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/AgentChatRequest"
-              }
-            }
-          }
-        },
         "responses": {
           "200": {
-            "description": "Typed newline-delimited agent event stream.",
+            "description": "Agent run state.",
             "content": {
-              "application/x-ndjson": {
+              "application/json": {
                 "schema": {
-                  "type": "string",
-                  "description": "Newline-delimited AgentStreamEvent JSON objects."
+                  "$ref": "#/components/schemas/AgentRun"
                 }
               }
             }
@@ -86,13 +74,13 @@
         }
       }
     },
-    "/v1beta/agents/{agentSlug}/prompt": {
-      "post": {
-        "summary": "Stream agent prompt",
-        "description": "Streams typed newline-delimited events from the agent identified by `agentSlug` for an explicit prompt.",
-        "operationId": "streamAgentPrompt",
+    "/v1beta/runs/{runId}/events": {
+      "get": {
+        "summary": "Resume agent run events",
+        "description": "Streams persisted run events in sequence order. The optional `after` query parameter resumes after a previously observed sequence.",
+        "operationId": "streamAgentRunEvents",
         "tags": [
-          "agents"
+          "runs"
         ],
         "security": [
           {
@@ -101,10 +89,78 @@
         ],
         "parameters": [
           {
-            "name": "agentSlug",
+            "name": "runId",
             "in": "path",
             "required": true,
-            "description": "Unique agent slug, such as `lush` for the built-in agent.",
+            "description": "Agent run identifier.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "required": false,
+            "description": "Resume after this last-observed event sequence.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Newline-delimited durable run events.",
+            "content": {
+              "application/x-ndjson": {
+                "schema": {
+                  "type": "string",
+                  "description": "Newline-delimited AgentRunEvent JSON objects."
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1beta/runs/{runId}/cancel": {
+      "post": {
+        "summary": "Cancel agent run",
+        "description": "Durably cancels an owned run, revokes its inference capability, and persists any already-streamed partial answer.",
+        "operationId": "cancelAgentRun",
+        "tags": [
+          "runs"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "runId",
+            "in": "path",
+            "required": true,
+            "description": "Agent run identifier.",
             "schema": {
               "type": "string"
             }
@@ -112,23 +168,20 @@
         ],
         "requestBody": {
           "required": true,
-          "description": "Model selection and prompt messages.",
+          "description": "Empty JSON body.",
           "content": {
             "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/AgentPromptRequest"
-              }
+              "schema": {}
             }
           }
         },
         "responses": {
           "200": {
-            "description": "Typed newline-delimited agent event stream.",
+            "description": "Cancelled or already-terminal agent run.",
             "content": {
-              "application/x-ndjson": {
+              "application/json": {
                 "schema": {
-                  "type": "string",
-                  "description": "Newline-delimited AgentStreamEvent JSON objects."
+                  "$ref": "#/components/schemas/AgentRun"
                 }
               }
             }

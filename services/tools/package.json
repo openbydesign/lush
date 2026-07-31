@@ -19,6 +19,7 @@
     "./spec": "./src/spec.ts",
     "./runtime": "./src/runtime.ts",
     "./gateway": "./src/gateway.ts",
+    "./digest": "./src/digest.ts",
     "./connectors": "./src/connectors/index.ts"
   }
 }

@@ -49,6 +49,11 @@ The standalone agent service verifies the same short-lived bearer access JWTs as
 the API gateway:
 
 - `GET /session` returns the active session profile.
+- `POST /sessions/:sessionId/runs` atomically starts or reattaches to a durable
+  chat run and streams persisted events.
+- `GET /runs/:runId` and `GET /runs/:runId/events?after=<sequence>` fetch and
+  resume an owned run.
+- `POST /runs/:runId/cancel` durably cancels an owned run.
 - `POST /agents/:agentSlug/chat` requires `Authorization: Bearer <token>`.
 - `POST /agents/:agentSlug/prompt` requires `Authorization: Bearer <token>`.
 
@@ -58,20 +63,16 @@ same keyed verification set so the agent can verify tokens during rotations.
 
 ## Chat Context
 
-`POST /agents/:agentSlug/chat` is session-backed. First-party clients send the
-target `sessionId` plus `messages[]` containing only the newest client-side
-message delta when possible. The agent service loads persisted session history
-from `services/sessions`, verifies that the session belongs to the `lush` agent,
-and appends only the non-overlapping client suffix before invoking inference.
+First-party Chat uses `POST /sessions/:sessionId/runs`. The server locks the
+owned session, persists the user message, snapshots the built-in agent revision,
+model, project context, and empty Phase 1 capability set, then executes the turn
+through the subprocess harness. Assistant messages and sequenced events are
+persisted before terminal completion, so disconnecting only detaches the event
+subscriber. An exact idempotency-key retry reattaches to the same run.
 
-The merge checks for a persisted-session suffix matching the client-message
-prefix using per-message MD5 hashes over role and content, then confirms exact
-role/content equality before deduplicating. The hash is only a cheap prefilter;
-authorization and session ownership come from the sessions service and access
-JWT.
-
-`POST /agents/:agentSlug/prompt` is for explicit one-off prompt calls, such as
-chat title generation. It does not load session history.
+`POST /agents/:agentSlug/chat` remains a compatibility endpoint for older
+clients. `POST /agents/:agentSlug/prompt` is the raw programmatic inference
+surface and does not create a Chat product run.
 
 ## Inference Configuration
 

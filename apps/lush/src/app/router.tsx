@@ -277,9 +277,7 @@ function ChatRoute() {
       sessionKey={app.chatSessionKey}
       ensureSession={app.ensureSession}
       onCreateSession={app.createChatSession}
-      onAppendSessionMessage={app.appendChatSessionMessage}
       onTruncateSession={app.truncateChatSession}
-      onSessionTitleChange={app.updateChatSessionTitle}
       onMessageFeedback={app.recordChatMessageFeedback}
       onModelSelectionChange={app.recordChatModelSelection}
     />

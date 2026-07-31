@@ -12,10 +12,12 @@
     "@lush/authz": "workspace:*",
     "@lush/code": "workspace:*",
     "@lush/config": "workspace:*",
+    "@lush/db": "workspace:*",
     "@lush/inference": "workspace:*",
     "@lush/logging": "workspace:*",
     "@lush/sessions": "workspace:*",
-    "@lush/tools": "workspace:*"
+    "@lush/tools": "workspace:*",
+    "kysely": "^0.28.7"
   },
   "devDependencies": {
     "@types/node": "^24.0.0"
@@ -27,6 +29,8 @@
     "./lush": "./src/agents/lush.ts",
     "./message-merge": "./src/message-merge.ts",
     "./runtime": "./src/runtime.ts",
+    "./run-executor": "./src/run-executor.ts",
+    "./runs": "./src/runs.ts",
     "./session-context": "./src/session-context.ts",
     "./stream-protocol": "./src/stream-protocol.ts",
     "./spec": "./src/spec.ts"

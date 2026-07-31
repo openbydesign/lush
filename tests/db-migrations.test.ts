@@ -22,8 +22,23 @@ test("database migration ids match their ordinal prefix", () => {
     "009_session_ip_columns",
     "010_organization_invite_tokens",
     "011_inference_model_capabilities",
-    "012_tool_gateway"
+    "012_tool_gateway",
+    "013_agent_runs"
   ]);
+});
+
+test("durable agent runs are append-only, scoped, and resumable", async () => {
+  const migration = await Bun.file(
+    "packages/db/src/migrations/013_agent_runs.ts"
+  ).text();
+
+  expect(migration).toContain("create table if not exists agent_runs");
+  expect(migration).toContain("unique(run_id, sequence)");
+  expect(migration).toContain("agent_runs_one_active_per_session_idx");
+  expect(migration).toContain("origin_message_id uuid not null");
+  expect(migration).toContain("configuration_digest text not null");
+  expect(migration).toContain("agent_run_capabilities");
+  expect(migration).toContain("agent_run_artifacts");
 });
 
 test("model capabilities are added append-only as structured JSON", async () => {

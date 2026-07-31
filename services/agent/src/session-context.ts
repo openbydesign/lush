@@ -130,7 +130,7 @@ function truncateUtf8(value: string, maxBytes: number) {
   return result;
 }
 
-function attachmentsFromMetadata(metadata: unknown) {
+export function attachmentsFromMetadata(metadata: unknown) {
   if (!metadata || typeof metadata !== "object") return undefined;
   const parts = (metadata as { parts?: unknown }).parts;
   if (!Array.isArray(parts)) return undefined;

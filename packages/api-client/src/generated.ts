@@ -473,6 +473,51 @@ export type AgentPromptRequest = {
   messages: AgentChatMessage[];
 };
 
+export type AgentRunStatus = "queued" | "running" | "waiting_for_approval" |
+  "needs_acknowledgment" | "completed" | "failed" | "cancelled";
+
+export type AgentRun = {
+  id: string;
+  organizationId: string;
+  sessionId: string;
+  originMessageId: string;
+  assistantMessageId: string | null;
+  initiatedByUserId: string;
+  agentRevisionId: string;
+  environmentId: string;
+  status: AgentRunStatus;
+  purpose: "chat" | "title";
+  idempotencyKey: string;
+  capabilityDigest: string;
+  configurationDigest: string;
+  isolationProvider: string;
+  untrustedContentIngested: boolean;
+  modelSelection: string;
+  errorCode: string | null;
+  errorMessage: string | null;
+  createdAt: string;
+  updatedAt: string;
+  startedAt: string | null;
+  completedAt: string | null;
+  cancelledAt: string | null;
+};
+
+export type CreateAgentRunRequest = {
+  idempotencyKey: string;
+  originMessageId?: string;
+  modelSelection?: string;
+  message: AgentChatMessage;
+  metadata?: unknown;
+};
+
+export type AgentRunEvent = {
+  runId: string;
+  sequence: number;
+  type: string;
+  payload: unknown;
+  createdAt: string;
+};
+
 
 
 export type ToolSource = "mcp" | "openapi" | "native";
@@ -995,6 +1040,40 @@ export const apiRoutes = [
     "kind": "json"
   },
   {
+    "id": "createAgentRun",
+    "method": "POST",
+    "path": "/v1beta/sessions/:sessionId/runs",
+    "requestType": "CreateAgentRunRequest",
+    "responseType": "Response",
+    "auth": true,
+    "kind": "stream"
+  },
+  {
+    "id": "fetchAgentRun",
+    "method": "GET",
+    "path": "/v1beta/runs/:runId",
+    "responseType": "AgentRun",
+    "auth": true,
+    "kind": "json"
+  },
+  {
+    "id": "streamAgentRunEvents",
+    "method": "GET",
+    "path": "/v1beta/runs/:runId/events",
+    "responseType": "Response",
+    "auth": true,
+    "kind": "stream"
+  },
+  {
+    "id": "cancelAgentRun",
+    "method": "POST",
+    "path": "/v1beta/runs/:runId/cancel",
+    "requestType": "Record<string, never>",
+    "responseType": "AgentRun",
+    "auth": true,
+    "kind": "json"
+  },
+  {
     "id": "streamAgentChat",
     "method": "POST",
     "path": "/v1beta/agents/:agentSlug/chat",
@@ -1129,6 +1208,10 @@ const TRUNCATE_SESSION_ROUTE = apiRoutes.find((route) => route.id === "truncateS
 const ARCHIVE_SESSION_ROUTE = apiRoutes.find((route) => route.id === "archiveSession")!;
 const FETCH_SESSION_SETTINGS_ROUTE = apiRoutes.find((route) => route.id === "fetchSessionSettings")!;
 const UPDATE_SESSION_SETTINGS_ROUTE = apiRoutes.find((route) => route.id === "updateSessionSettings")!;
+const CREATE_AGENT_RUN_ROUTE = apiRoutes.find((route) => route.id === "createAgentRun")!;
+const FETCH_AGENT_RUN_ROUTE = apiRoutes.find((route) => route.id === "fetchAgentRun")!;
+const STREAM_AGENT_RUN_EVENTS_ROUTE = apiRoutes.find((route) => route.id === "streamAgentRunEvents")!;
+const CANCEL_AGENT_RUN_ROUTE = apiRoutes.find((route) => route.id === "cancelAgentRun")!;
 const STREAM_AGENT_CHAT_ROUTE = apiRoutes.find((route) => route.id === "streamAgentChat")!;
 const STREAM_AGENT_PROMPT_ROUTE = apiRoutes.find((route) => route.id === "streamAgentPrompt")!;
 const LIST_TOOL_CONNECTIONS_ROUTE = apiRoutes.find((route) => route.id === "listToolConnections")!;
@@ -2148,6 +2231,84 @@ export async function updateSessionSettings(
   }
 
   return response.json() as Promise<SessionSettings>;
+}
+
+export function createAgentRun(
+  apiBaseUrl: string,
+  sessionId: string,
+  sessionToken: string | undefined, body: CreateAgentRunRequest,
+  signal?: AbortSignal
+) {
+  return fetch(apiUrl(apiBaseUrl, routePath(CREATE_AGENT_RUN_ROUTE.path, { sessionId })), {
+    method: "POST",
+    credentials: "include",
+    headers: {
+      ...authorizationHeaders(sessionToken),
+      "content-type": "application/json"
+    },
+    body: JSON.stringify(body),
+    signal
+  });
+}
+
+export async function fetchAgentRun(
+  apiBaseUrl: string,
+  runId: string,
+  sessionToken: string | undefined,
+) {
+  const response = await fetch(apiUrl(apiBaseUrl, routePath(FETCH_AGENT_RUN_ROUTE.path, { runId })), {
+    credentials: "include",
+    headers: {
+      ...authorizationHeaders(sessionToken),
+
+    }
+  });
+
+  if (!response.ok) {
+    throw await apiError("fetchAgentRun", response);
+  }
+
+  return response.json() as Promise<AgentRun>;
+}
+
+export function streamAgentRunEvents(
+  apiBaseUrl: string,
+  runId: string,
+  sessionToken: string | undefined, body: undefined,
+  signal?: AbortSignal
+) {
+  return fetch(apiUrl(apiBaseUrl, routePath(STREAM_AGENT_RUN_EVENTS_ROUTE.path, { runId })), {
+    method: "GET",
+    credentials: "include",
+    headers: {
+      ...authorizationHeaders(sessionToken),
+      "content-type": "application/json"
+    },
+    body: JSON.stringify(body),
+    signal
+  });
+}
+
+export async function cancelAgentRun(
+  apiBaseUrl: string,
+  runId: string,
+  sessionToken: string | undefined, body: Record<string, never>
+) {
+  const response = await fetch(apiUrl(apiBaseUrl, routePath(CANCEL_AGENT_RUN_ROUTE.path, { runId })), {
+    method: "POST",
+    credentials: "include",
+    headers: {
+      ...authorizationHeaders(sessionToken),
+      "content-type": "application/json"
+    },
+    body: JSON.stringify(body)
+  });
+
+  if (!response.ok) {
+    throw await apiError("cancelAgentRun", response);
+  }
+
+  return response.json() as Promise<AgentRun>;
 }
 
 export function streamAgentChat(

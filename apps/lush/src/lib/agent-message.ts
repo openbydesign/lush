@@ -1,6 +1,7 @@
 import type {
   AgentChatAttachment,
   AgentChatMessage,
+  AgentRunEvent,
   AgentStreamEvent,
   SessionMessage
 } from "@lush/api-client";
@@ -125,6 +126,31 @@ export async function readAgentEventStream(
   if (tail) onEvent(parseAgentStreamEvent(tail));
 }
 
+export async function readAgentRunEventStream(
+  response: Response,
+  onEvent: (event: AgentRunEvent) => void
+) {
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error("The agent run returned an empty response.");
+
+  const decoder = new TextDecoder();
+  let buffer = "";
+  while (true) {
+    const result = await reader.read();
+    if (result.done) break;
+    buffer += decoder.decode(result.value, { stream: true });
+    let newline = buffer.indexOf("\n");
+    while (newline >= 0) {
+      const line = buffer.slice(0, newline).trim();
+      buffer = buffer.slice(newline + 1);
+      if (line) onEvent(parseAgentRunEvent(line));
+      newline = buffer.indexOf("\n");
+    }
+  }
+  const tail = buffer.trim();
+  if (tail) onEvent(parseAgentRunEvent(tail));
+}
+
 export async function promptAttachments(
   files: Array<{ filename?: string; mediaType?: string; url: string }>
 ): Promise<ChatAttachmentPart[]> {
@@ -159,6 +185,24 @@ function parseAgentStreamEvent(line: string): AgentStreamEvent {
     return event;
   } catch {
     throw new Error("The agent returned an invalid event stream.");
+  }
+}
+
+function parseAgentRunEvent(line: string): AgentRunEvent {
+  try {
+    const event = JSON.parse(line) as AgentRunEvent;
+    if (
+      !event ||
+      typeof event !== "object" ||
+      typeof event.runId !== "string" ||
+      typeof event.sequence !== "number" ||
+      typeof event.type !== "string"
+    ) {
+      throw new Error("Invalid agent run event");
+    }
+    return event;
+  } catch {
+    throw new Error("The agent returned an invalid run event stream.");
   }
 }
 

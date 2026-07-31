@@ -19,6 +19,18 @@ import {
   encodeAgentStreamEvent
 } from "@lush/agent/stream-protocol";
 import {
+  AgentRunError,
+  cancelAgentRun,
+  createAgentRun,
+  fetchAgentRun,
+  isTerminalRunStatus,
+  listAgentRunEvents
+} from "@lush/agent/runs";
+import {
+  scheduleAgentRunExecution,
+  startAgentRunRecoveryLoop
+} from "@lush/agent/run-executor";
+import {
   AuthError,
   type AuthzAction,
   authorizePrincipal,
@@ -331,6 +343,10 @@ function routePath(id: ApiRouteId) {
 
 function sessionIdParam(c: Context) {
   return c.req.param("sessionId") ?? "";
+}
+
+function runIdParam(c: Context) {
+  return c.req.param("runId") ?? "";
 }
 
 function projectIdParam(c: Context) {
@@ -1414,6 +1430,64 @@ app.post(routePath("archiveSession"), async (c) => {
   }
 });
 
+app.post(routePath("createAgentRun"), async (c) => {
+  const authorized = await authenticateAuthorized(c, "createAgentRun");
+  if ("response" in authorized) return authorized.response;
+  const principal = organizationPrincipal(authorized.auth.principal);
+  if (!principal) return organizationRequired(c);
+
+  try {
+    const body = await c.req.json().catch(() => undefined);
+    const { run } = await createAgentRun(principal, sessionIdParam(c), body);
+    void scheduleAgentRunExecution(run.id);
+    return streamDurableRun(principal, run.id, c.req.raw, 0);
+  } catch (error) {
+    return handleAgentRunError(c, error, "Unable to create agent run");
+  }
+});
+
+app.get(routePath("fetchAgentRun"), async (c) => {
+  const authorized = await authenticateAuthorized(c, "fetchAgentRun");
+  if ("response" in authorized) return authorized.response;
+  const principal = organizationPrincipal(authorized.auth.principal);
+  if (!principal) return organizationRequired(c);
+
+  try {
+    return c.json(await fetchAgentRun(principal, runIdParam(c)));
+  } catch (error) {
+    return handleAgentRunError(c, error, "Unable to load agent run");
+  }
+});
+
+app.get(routePath("streamAgentRunEvents"), async (c) => {
+  const authorized = await authenticateAuthorized(c, "streamAgentRunEvents");
+  if ("response" in authorized) return authorized.response;
+  const principal = organizationPrincipal(authorized.auth.principal);
+  if (!principal) return organizationRequired(c);
+
+  try {
+    const runId = runIdParam(c);
+    await fetchAgentRun(principal, runId);
+    const after = normalizeEventSequence(c.req.query("after"));
+    return streamDurableRun(principal, runId, c.req.raw, after);
+  } catch (error) {
+    return handleAgentRunError(c, error, "Unable to stream agent run");
+  }
+});
+
+app.post(routePath("cancelAgentRun"), async (c) => {
+  const authorized = await authenticateAuthorized(c, "cancelAgentRun");
+  if ("response" in authorized) return authorized.response;
+  const principal = organizationPrincipal(authorized.auth.principal);
+  if (!principal) return organizationRequired(c);
+
+  try {
+    return c.json(await cancelAgentRun(principal, runIdParam(c)));
+  } catch (error) {
+    return handleAgentRunError(c, error, "Unable to cancel agent run");
+  }
+});
+
 app.post(routePath("streamAgentChat"), async (c) => {
   const authorized = await authenticateAuthorized(c, "streamAgentChat");
   if ("response" in authorized) {
@@ -1515,7 +1589,83 @@ logger.info(
   "api listening"
 );
 
+startAgentRunRecoveryLoop();
+
 export type AppType = typeof app;
+
+function streamDurableRun(
+  principal: OrganizationPrincipal,
+  runId: string,
+  request: Request,
+  after: number
+) {
+  const encoder = new TextEncoder();
+  let closed = false;
+  const stream = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      let cursor = after;
+      let lastHeartbeat = Date.now();
+      try {
+        while (!request.signal.aborted) {
+          const events = await listAgentRunEvents(principal, runId, cursor);
+          for (const event of events) {
+            cursor = event.sequence;
+            controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`));
+          }
+          const run = await fetchAgentRun(principal, runId);
+          if (isTerminalRunStatus(run.status) && events.length === 0) break;
+          if (Date.now() - lastHeartbeat >= 15_000) {
+            controller.enqueue(encoder.encode("\n"));
+            lastHeartbeat = Date.now();
+          }
+          await waitForRunPoll(request.signal, 100);
+        }
+        if (!closed) {
+          closed = true;
+          controller.close();
+        }
+      } catch (error) {
+        if (!closed) {
+          closed = true;
+          controller.error(error);
+        }
+      }
+    },
+    cancel() {
+      // Disconnecting detaches only this subscriber. The durable run continues
+      // until its terminal state or an explicit authenticated cancel request.
+      closed = true;
+    }
+  });
+  return new Response(stream, {
+    headers: {
+      "content-type": agentStreamContentType,
+      "cache-control": "no-cache, no-transform",
+      "x-accel-buffering": "no",
+      "x-lush-run": runId
+    }
+  });
+}
+
+function waitForRunPoll(signal: AbortSignal, milliseconds: number) {
+  return new Promise<void>((resolve) => {
+    if (signal.aborted) return resolve();
+    const timer = setTimeout(resolve, milliseconds);
+    signal.addEventListener("abort", () => {
+      clearTimeout(timer);
+      resolve();
+    }, { once: true });
+  });
+}
+
+function normalizeEventSequence(value: string | undefined) {
+  if (!value) return 0;
+  const sequence = Number(value);
+  if (!Number.isSafeInteger(sequence) || sequence < 0) {
+    throw new AgentRunError("invalid_event_sequence", "Event sequence is invalid");
+  }
+  return sequence;
+}
 
 function streamClientEvents(request: Request, principal: Principal) {
   const encoder = new TextEncoder();
@@ -1992,6 +2142,22 @@ function handleSessionStateError(
     { error: "session_state_failed", message: fallbackMessage },
     400
   );
+}
+
+function handleAgentRunError(
+  c: Context,
+  error: unknown,
+  fallbackMessage: string
+) {
+  if (error instanceof AgentRunError) {
+    return c.json(
+      { error: error.code, message: error.message },
+      contentfulStatus(error.status)
+    );
+  }
+
+  logger.error({ err: error }, fallbackMessage);
+  return c.json({ error: "agent_run_failed", message: fallbackMessage }, 500);
 }
 
 function handleToolError(
