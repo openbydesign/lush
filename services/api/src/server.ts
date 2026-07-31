@@ -24,7 +24,10 @@ import {
   createAgentRun,
   fetchAgentRun
 } from "@lush/agent/runs";
-import { streamDurableRun } from "@lush/agent/run-stream";
+import {
+  exposedAgentRunHeaders,
+  streamDurableRun
+} from "@lush/agent/run-stream";
 import {
   scheduleAgentRunExecution,
   startAgentRunRecoveryLoop
@@ -309,6 +312,7 @@ app.use(
   cors({
     origin: allowedOrigins,
     allowHeaders: ["authorization", "content-type"],
+    exposeHeaders: exposedAgentRunHeaders,
     allowMethods: ["GET", "POST", "PATCH", "OPTIONS"],
     credentials: true,
     maxAge: 86400

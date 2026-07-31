@@ -8,6 +8,8 @@ import { agentStreamContentType } from "./stream-protocol";
 
 const heartbeatIntervalMs = 15_000;
 const pollIntervalMs = 100;
+export const agentRunIdHeader = "x-lush-run";
+export const exposedAgentRunHeaders = [agentRunIdHeader];
 
 /** Stream one durable run without coupling subscriber lifetime to execution. */
 export function streamDurableRun(
@@ -65,7 +67,7 @@ export function streamDurableRun(
       "content-type": agentStreamContentType,
       "cache-control": "no-cache, no-transform",
       "x-accel-buffering": "no",
-      "x-lush-run": runId
+      [agentRunIdHeader]: runId
     }
   });
 }

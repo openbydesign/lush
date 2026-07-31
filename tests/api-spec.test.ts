@@ -1,5 +1,9 @@
 import { expect, test } from "bun:test";
 import { apiSpec } from "../services/api/src/spec";
+import {
+  agentRunIdHeader,
+  exposedAgentRunHeaders
+} from "../services/agent/src/run-stream";
 
 test("public API routes are grouped under v1beta", () => {
   expect(apiSpec.apiGroup).toBe("/v1beta");
@@ -25,4 +29,18 @@ test("public API routes are grouped under v1beta", () => {
       (route) => route.path === "/v1beta/agents/:agentSlug/chat"
     )
   ).toBe(true);
+});
+
+test("browser clients can read the durable run identifier", async () => {
+  expect(agentRunIdHeader).toBe("x-lush-run");
+  expect(exposedAgentRunHeaders).toContain(agentRunIdHeader);
+
+  const [apiServer, agentServer] = await Promise.all([
+    Bun.file("services/api/src/server.ts").text(),
+    Bun.file("services/agent/src/server.ts").text()
+  ]);
+  expect(apiServer).toContain("exposeHeaders: exposedAgentRunHeaders");
+  expect(agentServer).toContain(
+    '\"access-control-expose-headers\": exposedAgentRunHeaders.join(\",\")'
+  );
 });

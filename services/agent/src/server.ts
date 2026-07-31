@@ -27,7 +27,7 @@ import {
   fetchAgentRun,
   type AgentRunPrincipal
 } from "./runs";
-import { streamDurableRun } from "./run-stream";
+import { exposedAgentRunHeaders, streamDurableRun } from "./run-stream";
 import {
   agentStreamContentType,
   agentTextEventStream,
@@ -44,6 +44,7 @@ const corsHeaders = {
   "access-control-allow-origin": agentConfig.LUSH_APP_ORIGIN,
   "access-control-allow-methods": "GET,POST,OPTIONS",
   "access-control-allow-headers": "authorization,content-type",
+  "access-control-expose-headers": exposedAgentRunHeaders.join(","),
   "access-control-max-age": "86400"
 };
 
