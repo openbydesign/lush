@@ -639,15 +639,6 @@ async function requireLeaseForUpdate(trx: Transaction<Database>, claimed: Claime
   return run;
 }
 
-async function assertLease(claimed: ClaimedRun) {
-  const run = await getDb().selectFrom("agentRuns").select("id")
-    .where("id", "=", claimed.run.id)
-    .where("status", "=", "running")
-    .where("leaseOwner", "=", claimed.leaseOwner)
-    .executeTakeFirst();
-  if (!run) throw new AgentRunError("run_lease_lost", "Run execution lease was lost", 409);
-}
-
 function maintainLease(claimed: ClaimedRun, controller: AbortController) {
   const timer = setInterval(() => {
     void renewLease(claimed).then((renewed) => {
