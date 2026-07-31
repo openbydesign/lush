@@ -21,6 +21,8 @@ import {
 } from "../services/tools/src/gateway";
 import { canonicalJson, sha256Hex } from "../services/tools/src/digest";
 import { validateInput } from "../services/tools/src/validate";
+import { createAgentRun } from "../services/agent/src/runs";
+import { createSession } from "../services/sessions/src/runtime";
 
 async function invokeTool(
   principal: ToolsPrincipal,
@@ -490,8 +492,8 @@ if (!databaseUrl) {
       });
       await discoverConnectionCatalog(principal, connection.id, new AbortController().signal);
 
-      const runA = crypto.randomUUID();
-      const runB = crypto.randomUUID();
+      const runA = await seedToolRun(principal);
+      const runB = await seedToolRun(principal);
       const input = { a: 2, b: 3 };
 
       const first = await invokeTool(principal, {
@@ -522,6 +524,20 @@ if (!databaseUrl) {
       });
       expect(sameRun.status).toBe("succeeded");
     });
+
+    async function seedToolRun(principal: ToolsPrincipal) {
+      const session = await createSession(principal, {
+        title: "Tool approval run",
+        agentId: "lush-chat"
+      });
+      const { run } = await createAgentRun(principal, session.id, {
+        idempotencyKey: crypto.randomUUID(),
+        modelSelection: "test:model",
+        message: { role: "user", content: "Invoke a tool" },
+        metadata: {}
+      });
+      return run.id;
+    }
 
     test("only the initiating principal may decide an approval", async () => {
       const principal = await seedPrincipal("admin");
