@@ -68,6 +68,7 @@ test("API tokens default deny routes without an explicit matching scope", () => 
     organizationId: "org-1",
     membershipId: "membership-1",
     role: "admin",
+    sessionId: null,
     tokenId: "token-1",
     scopes: ["sessions:read"]
   };

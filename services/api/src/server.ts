@@ -37,7 +37,6 @@ import {
   type AuthzAction,
   authorizeApiToken,
   authorizePrincipal,
-  apiTokenHasScope,
   bearerToken,
   createApiToken,
   createOrganization,
@@ -1041,8 +1040,7 @@ app.post(routePath("updateInferenceModelDefault"), async (c) => {
 app.get(routePath("listOpenAICompatibleModels"), async (c) => {
   const authorized = await authenticateOpenAICompatible(
     c,
-    "listOpenAICompatibleModels",
-    "inference:read"
+    "listOpenAICompatibleModels"
   );
   if ("response" in authorized) return authorized.response;
 
@@ -1060,8 +1058,7 @@ app.get(routePath("listOpenAICompatibleModels"), async (c) => {
 app.get(routePath("retrieveOpenAICompatibleModel"), async (c) => {
   const authorized = await authenticateOpenAICompatible(
     c,
-    "retrieveOpenAICompatibleModel",
-    "inference:read"
+    "retrieveOpenAICompatibleModel"
   );
   if ("response" in authorized) return authorized.response;
 
@@ -1814,6 +1811,10 @@ function normalizeEventSequence(value: string | undefined) {
 }
 
 function streamClientEvents(request: Request, principal: Principal) {
+  if (!principal.sessionId) {
+    throw new Error("Client event streams require an interactive session");
+  }
+  const sessionId = principal.sessionId;
   const encoder = new TextEncoder();
   let heartbeat: ReturnType<typeof setInterval> | undefined;
   let unsubscribe: (() => void) | undefined;
@@ -1844,7 +1845,7 @@ function streamClientEvents(request: Request, principal: Principal) {
       unsubscribe = clientEvents.subscribe(
         {
           userId: principal.userId,
-          sessionId: principal.sessionId,
+          sessionId,
           organizationId: principal.organizationId,
           membershipId: principal.membershipId
         },
@@ -2051,8 +2052,7 @@ async function authenticateAuthorized(c: Context, action: AuthzAction) {
 
 async function authenticateOpenAICompatible(
   c: Context,
-  action: AuthzAction,
-  scope: "inference:read" | "inference:invoke"
+  action: AuthzAction
 ) {
   const bearer = bearerToken(c.req.raw);
   if (!bearer) {
@@ -2086,19 +2086,24 @@ async function authenticateOpenAICompatible(
         )
       };
     }
-    if (!apiTokenHasScope(principal, scope)) {
-      return {
-        response: openAICompatibleErrorResponse(
-          c,
-          new OpenAICompatibleApiError(
-            `API token requires the '${scope}' scope`,
-            "invalid_request_error",
-            null,
-            "insufficient_scope",
-            403
+    try {
+      authorizeApiToken(principal, action);
+    } catch (error) {
+      if (error instanceof AuthError) {
+        return {
+          response: openAICompatibleErrorResponse(
+            c,
+            new OpenAICompatibleApiError(
+              error.message,
+              "invalid_request_error",
+              null,
+              error.code,
+              error.status
+            )
           )
-        )
-      };
+        };
+      }
+      throw error;
     }
     return { principal };
   }
@@ -2165,8 +2170,7 @@ async function forwardOpenAICompatibleRequest(
 ) {
   const authorized = await authenticateOpenAICompatible(
     c,
-    action,
-    "inference:invoke"
+    action
   );
   if ("response" in authorized) return authorized.response;
 

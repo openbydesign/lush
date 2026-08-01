@@ -49,7 +49,7 @@ export type Principal = {
   organizationId: string | null;
   membershipId: string | null;
   role: UserRole | null;
-  sessionId: string;
+  sessionId: string | null;
   tokenId?: string;
 };
 
@@ -60,7 +60,8 @@ export type ApiTokenPrincipal = Principal & {
   tokenId: string;
   organizationId: string;
   membershipId: string;
-  role: "admin";
+  role: UserRole;
+  sessionId: null;
   scopes: ApiTokenScope[];
 };
 
@@ -550,6 +551,8 @@ export function authorizeApiToken(
     );
   }
 
+  authorizePrincipal(principal, action);
+
   return {
     allowed: true as const,
     action,
@@ -700,7 +703,8 @@ export async function resolveApiToken(
       "apiTokens.createdByUserId as userId",
       "apiTokens.scopes",
       "apiTokens.lastUsedAt",
-      "organizationMemberships.id as membershipId"
+      "organizationMemberships.id as membershipId",
+      "organizationMemberships.role"
     ])
     .where("tokenHash", "=", await hashSecret(token))
     .where("revokedAt", "is", null)
@@ -724,8 +728,8 @@ export async function resolveApiToken(
     userId: row.userId,
     organizationId: row.organizationId,
     membershipId: row.membershipId,
-    role: "admin",
-    sessionId: row.tokenId,
+    role: row.role,
+    sessionId: null,
     scopes: row.scopes
   };
 }
@@ -1311,7 +1315,7 @@ export async function resolvePrincipal(
 }
 
 export async function revokeSession(principal: Principal) {
-  await revokeSessionId(getDb(), principal.sessionId);
+  await revokeSessionId(getDb(), requireSessionId(principal));
 
   return { ok: true as const };
 }
@@ -1382,7 +1386,7 @@ export async function switchOrganization(
       );
     }
 
-    await revokeSessionId(trx, principal.sessionId);
+    await revokeSessionId(trx, requireSessionId(principal));
     const refreshSession = await createSession(trx, {
       userId: principal.userId,
       organizationId: membership.organizationId,
@@ -1441,7 +1445,7 @@ export async function createOrganization(
       }
     });
 
-    await revokeSessionId(trx, principal.sessionId);
+    await revokeSessionId(trx, requireSessionId(principal));
     const refreshSession = await createSession(trx, {
       userId: principal.userId,
       organizationId: organization.id,
@@ -1484,7 +1488,7 @@ export async function updateCurrentUser(
     }
   });
 
-  return loadSessionResponse(db, principal.sessionId);
+  return loadSessionResponse(db, requireSessionId(principal));
 }
 
 export async function updateCurrentOrganization(
@@ -1517,7 +1521,7 @@ export async function updateCurrentOrganization(
     }
   });
 
-  return loadSessionResponse(db, principal.sessionId);
+  return loadSessionResponse(db, requireSessionId(principal));
 }
 
 export async function deleteCurrentOrganization(
@@ -1586,12 +1590,13 @@ export async function listOrganizationMembers(principal: Principal) {
 
 export async function updateOrganizationMemberRole(
   principal: Principal,
-  request: unknown
+  request: unknown,
+  options: Pick<ApiTokenRuntimeOptions, "db"> = {}
 ) {
   assertCanManageOrganization(principal);
   const organizationId = requireOrganizationId(principal);
   const body = normalizeUpdateOrganizationMemberRoleRequest(request);
-  const db = getDb();
+  const db = options.db ?? getDb();
 
   return db.transaction().execute(async (trx) => {
     await lockOrganizationMemberships(trx, organizationId);
@@ -1626,6 +1631,7 @@ export async function updateOrganizationMemberRole(
     await recordAuditEvent(trx, {
       organizationId,
       userId: principal.userId,
+      sessionId: principal.sessionId,
       action: "auth.organization_member_role_updated",
       targetType: "organization_membership",
       targetId: body.membershipId,
@@ -1679,6 +1685,7 @@ export async function removeOrganizationMember(
     await recordAuditEvent(trx, {
       organizationId,
       userId: principal.userId,
+      sessionId: principal.sessionId,
       action: "auth.organization_member_removed",
       targetType: "organization_membership",
       targetId: body.membershipId,
@@ -1757,7 +1764,7 @@ export async function createOrganizationInvite(
     await recordAuditEvent(trx, {
       organizationId,
       userId: principal.userId,
-      sessionId: principal.tokenId ? null : principal.sessionId,
+      sessionId: principal.sessionId,
       action: "auth.organization_invite_created",
       targetType: "organization_invite",
       targetId: invite.id,
@@ -2341,6 +2348,18 @@ function requireOrganizationId(principal: Principal) {
   }
 
   return principal.organizationId;
+}
+
+function requireSessionId(principal: Principal) {
+  if (!principal.sessionId) {
+    throw new AuthError(
+      "session_required",
+      "An interactive session is required",
+      403
+    );
+  }
+
+  return principal.sessionId;
 }
 
 export function authAssertionEmailVerified(assertion: AuthAssertion) {

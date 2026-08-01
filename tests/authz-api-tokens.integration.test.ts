@@ -2,10 +2,12 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { createIsolatedTestDatabase } from "../packages/db/src/test";
 import {
   apiTokenHasScope,
+  authorizeApiToken,
   createApiToken,
   listApiTokens,
   resolveApiToken,
   revokeApiToken,
+  updateOrganizationMemberRole,
   type Principal
 } from "../services/authz/src/runtime";
 import { integrationDatabaseUrl } from "./integration-database";
@@ -82,7 +84,7 @@ if (!databaseUrl) {
         organizationId: created.token.organizationId,
         membershipId: admin.membershipId,
         role: "admin",
-        sessionId: created.token.id,
+        sessionId: null,
         scopes: ["inference:read", "inference:invoke"]
       });
       expect(apiTokenHasScope(resolved!, "inference:invoke")).toBe(true);
@@ -126,6 +128,72 @@ if (!databaseUrl) {
         .execute();
 
       expect(await resolveApiToken(created.secret, { db })).toBeUndefined();
+    });
+
+    test("uses the creator's live role when authorizing a token", async () => {
+      const actor = await insertPrincipal(db, admin.organizationId!, "admin");
+      const created = await createApiToken(
+        actor,
+        { name: "Demoted owner", scopes: ["organization:write"] },
+        { db }
+      );
+
+      await db
+        .updateTable("organizationMemberships")
+        .set({ role: "user", updatedAt: new Date() })
+        .where("id", "=", actor.membershipId!)
+        .execute();
+
+      const resolved = await resolveApiToken(created.secret, { db });
+      expect(resolved).toMatchObject({ role: "user", sessionId: null });
+      expect(() =>
+        authorizeApiToken(resolved!, "updateOrganizationMemberRole")
+      ).toThrow("You do not have permission to perform this action");
+      await expect(
+        updateOrganizationMemberRole(
+          resolved!,
+          { membershipId: user.membershipId, role: "admin" },
+          { db }
+        )
+      ).rejects.toMatchObject({ code: "insufficient_role" });
+    });
+
+    test("records token-authenticated organization mutations without a session", async () => {
+      const actor = await insertPrincipal(db, admin.organizationId!, "admin");
+      const target = await insertPrincipal(db, admin.organizationId!, "user");
+      const created = await createApiToken(
+        actor,
+        { name: "Organization manager", scopes: ["organization:write"] },
+        { db }
+      );
+      const resolved = await resolveApiToken(created.secret, { db });
+
+      expect(
+        authorizeApiToken(resolved!, "updateOrganizationMemberRole").allowed
+      ).toBe(true);
+      await updateOrganizationMemberRole(
+        resolved!,
+        { membershipId: target.membershipId, role: "admin" },
+        { db }
+      );
+
+      const membership = await db
+        .selectFrom("organizationMemberships")
+        .select("role")
+        .where("id", "=", target.membershipId!)
+        .executeTakeFirstOrThrow();
+      expect(membership.role).toBe("admin");
+
+      const audit = await db
+        .selectFrom("auditEvents")
+        .select(["sessionId", "metadata"])
+        .where("action", "=", "auth.organization_member_role_updated")
+        .where("targetId", "=", target.membershipId!)
+        .executeTakeFirstOrThrow();
+      expect(audit).toMatchObject({
+        sessionId: null,
+        metadata: { apiTokenId: created.token.id, role: "admin" }
+      });
     });
 
     test("revocation and expiration fail closed", async () => {
