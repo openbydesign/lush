@@ -235,6 +235,57 @@ describe("app agent message parts", () => {
     ]);
   });
 
+  test("resolves approval only on the latest reused provider call id", () => {
+    let parts: ChatMessagePart[] = [];
+    parts = appendAgentStreamEvent(parts, {
+      type: "tool-input",
+      toolCallId: "provider-call:0",
+      toolName: "web_fetch",
+      input: { urls: ["https://example.com/one"] }
+    });
+    parts = appendAgentStreamEvent(parts, {
+      type: "tool-output",
+      toolCallId: "provider-call:0",
+      toolName: "web_fetch",
+      output: { page: "one" }
+    });
+    parts = appendAgentStreamEvent(parts, {
+      type: "tool-input",
+      toolCallId: "provider-call:0",
+      toolName: "web_fetch",
+      input: { urls: ["https://example.com/two"] }
+    });
+    parts = appendAgentStreamEvent(parts, {
+      type: "tool-approval-required",
+      approvalId: "approval-2",
+      toolCallId: "provider-call:0",
+      toolName: "web_fetch",
+      expiresAt: "2026-07-31T21:00:00.000Z"
+    });
+    parts = appendAgentStreamEvent(parts, {
+      type: "tool-approval-resolved",
+      approvalId: "approval-2",
+      toolCallId: "provider-call:0",
+      toolName: "web_fetch",
+      decision: "approved"
+    });
+
+    expect(parts).toEqual([
+      expect.objectContaining({
+        state: "output-available",
+        input: { urls: ["https://example.com/one"] },
+        output: { page: "one" }
+      }),
+      expect.objectContaining({
+        state: "approval-responded",
+        input: { urls: ["https://example.com/two"] },
+        approvalId: "approval-2",
+        approvalDecision: "approved"
+      })
+    ]);
+    expect(parts[0]).not.toHaveProperty("approvalDecision");
+  });
+
   test("closes unfinished tool states when a turn stops", () => {
     const parts = finalizePendingToolParts([{
       type: "tool",

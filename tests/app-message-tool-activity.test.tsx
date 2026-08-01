@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { createElement } from "../apps/lush/node_modules/react/index.js";
-import { renderToStaticMarkup } from "../apps/lush/node_modules/react-dom/server.js";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { Message } from "../apps/lush/src/ui/Message";
 
 describe("chat tool activity", () => {

@@ -11,6 +11,8 @@
         "@typescript/native-preview": "^7.0.0-dev.20260626.1",
         "dotenv": "^17.4.2",
         "kysely": "^0.28.7",
+        "react": "^19.2.0",
+        "react-dom": "^19.2.0",
       },
     },
     "apps/lush": {

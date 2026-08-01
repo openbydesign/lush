@@ -426,8 +426,10 @@ function resolveToolApproval(
   parts: ChatMessagePart[],
   event: Extract<AgentStreamEvent, { type: "tool-approval-resolved" }>
 ) {
-  return parts.map((part) =>
-    part.type === "tool" && part.toolCallId === event.toolCallId
+  const existing = lastToolPartIndex(parts, event.toolCallId);
+  if (existing < 0) return parts;
+  return parts.map((part, index) =>
+    index === existing && part.type === "tool"
       ? {
           ...part,
           state: event.decision === "approved"
