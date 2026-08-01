@@ -19,6 +19,7 @@ import { decideApproval } from "@lush/tools/gateway";
 import type { Kysely, Transaction } from "kysely";
 import { lushAgent } from "./agents/lush";
 import { normalizeAgentChatMessages } from "./chat-request";
+import { allocateModelToolName } from "./model-tool-name";
 import {
   attachmentsFromMetadata,
   projectContextForPrompt,
@@ -57,7 +58,9 @@ export type AgentRunToolCapability = {
   connectionLabel: string;
   connectionSource: ToolSource;
   connectionIconUrl?: string;
+  /** Provider-safe name exposed to the model. */
   name: string;
+  /** Original connector name used for gateway invocation. */
   externalName: string;
   title: string;
   description: string;
@@ -472,15 +475,18 @@ async function resolveRunTools(
     .where("connectionId", "in", connections.map((connection) => connection.id))
     .where("enabled", "=", true)
     .orderBy("qualifiedName", "asc")
+    .orderBy("id", "asc")
     .execute();
 
-  return definitions.flatMap((definition) => {
-    if (disabled.has(definition.id)) return [];
+  const usedNames = new Set<string>();
+  const tools: AgentRunToolCapability[] = [];
+  for (const definition of definitions) {
+    if (disabled.has(definition.id)) continue;
     const annotations = definition.annotations as ToolAnnotations;
     if (decideApproval(annotations, policyByConnection.get(definition.connectionId)) === "deny") {
-      return [];
+      continue;
     }
-    return [{
+    tools.push({
       definitionId: definition.id,
       connectionId: definition.connectionId,
       connectionLabel:
@@ -490,7 +496,7 @@ async function resolveRunTools(
       ...(presentationByConnection.get(definition.connectionId)?.iconUrl
         ? { connectionIconUrl: presentationByConnection.get(definition.connectionId)!.iconUrl }
         : {}),
-      name: definition.qualifiedName,
+      name: allocateModelToolName(definition.qualifiedName, usedNames),
       externalName: definition.externalName,
       title: definition.title,
       description: definition.description,
@@ -498,8 +504,9 @@ async function resolveRunTools(
       definitionDigest: definition.definitionDigest,
       timeoutMs: definition.timeoutMs,
       annotations
-    }];
-  });
+    });
+  }
+  return tools;
 }
 
 function connectionIconUrl(endpointConfig: unknown): string | undefined {
@@ -618,6 +625,18 @@ export async function cancelAgentRun(
       completedAt: now,
       cancelledAt: now
     }).where("id", "=", run.id).returningAll().executeTakeFirstOrThrow();
+    await trx.updateTable("toolApprovals").set({
+      status: "expired",
+      decidedAt: now
+    }).where("runId", "=", run.id)
+      .where("status", "=", "pending")
+      .execute();
+    await trx.updateTable("toolCalls").set({
+      status: "cancelled",
+      completedAt: now
+    }).where("runId", "=", run.id)
+      .where("status", "=", "waiting_for_approval")
+      .execute();
     await trx.updateTable("agentRunCapabilities").set({ revokedAt: now })
       .where("runId", "=", run.id).execute();
     await trx.updateTable("agentEnvironments").set({

@@ -17,6 +17,7 @@ export { echoHarness, toolCallingHarness } from "./harnesses";
 export type { ToolCallingHarnessOptions } from "./harnesses";
 export {
   IsolationError,
+  ActiveExecutionClock,
   defaultEnvironmentLimits,
   resolveLimits,
   type IsolationProvider,

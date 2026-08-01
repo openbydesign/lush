@@ -84,6 +84,16 @@ describe("provider tool turns", () => {
     }]);
     expect(request.tools).toEqual([expect.objectContaining({ name: "web__search" })]);
   });
+
+  test("rejects array-valued tool arguments", async () => {
+    await expect(withProviderResponse("openai-compatible", [{
+      choices: [{ delta: { tool_calls: [{
+        index: 0,
+        id: "call-1",
+        function: { name: "web__search", arguments: "[]" }
+      }] } }]
+    }])).rejects.toThrow("non-object arguments");
+  });
 });
 
 async function withProviderResponse(

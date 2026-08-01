@@ -130,8 +130,8 @@ if (!databaseUrl) {
       const definitions = await getDb().insertInto("toolDefinitions").values([
         {
           connectionId: connection.id,
-          externalName: "web_search",
-          qualifiedName: "web_search__web_search",
+          externalName: "web.search",
+          qualifiedName: "web.search__web.search",
           title: "Search the web",
           description: "Find current information",
           inputSchema: {
@@ -197,7 +197,7 @@ if (!databaseUrl) {
           connectionLabel: "Web Search",
           connectionSource: "openapi",
           connectionIconUrl: "https://example.com/favicon.ico",
-          externalName: "web_search",
+          externalName: "web.search",
           name: "web_search__web_search",
           definitionDigest: "search-digest",
           timeoutMs: 60_000
@@ -569,6 +569,9 @@ if (!databaseUrl) {
           ...runRequest("tool-execute", "Why is the air bad in Sonoma?"),
           modelSelection: `${provider.id}:tool-model`
         });
+        await getDb().updateTable("agentRuns").set({
+          limits: { wallClockMs: 1_000, maxOutputBytes: 8_000_000 }
+        }).where("id", "=", created.run.id).execute();
 
         const execution = executeAgentRun(created.run.id);
         const approval = await waitForValue(async () => getDb()
@@ -583,6 +586,9 @@ if (!databaseUrl) {
           return row?.status === "waiting_for_approval" ? row : undefined;
         });
         expect(waitingRun.status).toBe("waiting_for_approval");
+        // Approval time does not consume the child environment's active-time
+        // budget. This wait exceeds the run's configured one-second ceiling.
+        await Bun.sleep(1_100);
         await decideToolApproval(
           { ...principal, role: "user" },
           approval.id,
@@ -679,6 +685,38 @@ if (!databaseUrl) {
         )?.payload).toMatchObject({ decision: "denied" });
         expect(deniedEvents.find((event) => event.type === "tool-output")?.payload)
           .toMatchObject({ errorText: "approval_denied" });
+
+        const cancelledSession = await createSession(principal, {
+          title: "Cancelled approval test",
+          agentId: "lush-chat"
+        });
+        const cancelled = await createAgentRun(principal, cancelledSession.id, {
+          ...runRequest("tool-cancelled", "Check Sonoma once more"),
+          modelSelection: `${provider.id}:tool-model`
+        });
+        const cancelledExecution = executeAgentRun(cancelled.run.id);
+        const cancelledApproval = await waitForValue(async () => getDb()
+          .selectFrom("toolApprovals")
+          .select(["id", "toolCallId"])
+          .where("runId", "=", cancelled.run.id)
+          .where("status", "=", "pending")
+          .executeTakeFirst());
+        await waitForValue(async () => {
+          const row = await getDb().selectFrom("agentRuns").select("status")
+            .where("id", "=", cancelled.run.id).executeTakeFirst();
+          return row?.status === "waiting_for_approval" ? row : undefined;
+        });
+
+        await cancelAgentRun(principal, cancelled.run.id);
+        await cancelledExecution;
+
+        expect(await getDb().selectFrom("toolApprovals").select("status")
+          .where("id", "=", cancelledApproval.id)
+          .executeTakeFirstOrThrow()).toEqual({ status: "expired" });
+        expect(await getDb().selectFrom("toolCalls").select("status")
+          .where("id", "=", cancelledApproval.toolCallId!)
+          .executeTakeFirstOrThrow()).toEqual({ status: "cancelled" });
+        expect(toolInvocations).toBe(1);
       } finally {
         providerServer.stop(true);
       }

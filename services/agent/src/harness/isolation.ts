@@ -23,11 +23,46 @@ import type { Harness } from "./protocol";
 export type EnvironmentProfile = "chat" | "code" | "work";
 
 export type EnvironmentLimits = {
-  /** Hard wall-clock ceiling for a single harness turn. */
+  /** Active-execution ceiling for a single harness turn. */
   wallClockMs: number;
   /** Maximum bytes a turn may stream back before the boundary is torn down. */
   maxOutputBytes: number;
 };
+
+/**
+ * Shared control for time that must not consume an environment's execution
+ * budget. Approval waits are orchestrator-owned idle time: the environment is
+ * still alive, but neither inference nor a tool is executing.
+ */
+export class ActiveExecutionClock {
+  private pauseDepth = 0;
+  private readonly listeners = new Set<(paused: boolean) => void>();
+
+  get paused(): boolean {
+    return this.pauseDepth > 0;
+  }
+
+  pause(): () => void {
+    this.pauseDepth += 1;
+    if (this.pauseDepth === 1) this.notify(true);
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      this.pauseDepth = Math.max(0, this.pauseDepth - 1);
+      if (this.pauseDepth === 0) this.notify(false);
+    };
+  }
+
+  subscribe(listener: (paused: boolean) => void): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+
+  private notify(paused: boolean): void {
+    for (const listener of this.listeners) listener(paused);
+  }
+}
 
 export const defaultEnvironmentLimits: EnvironmentLimits = {
   wallClockMs: 120_000,

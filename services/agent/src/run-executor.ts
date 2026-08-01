@@ -11,6 +11,7 @@ import { textMessage, type Message } from "./harness/content";
 import type { EventLog, ConversationEvent } from "./harness/protocol";
 import { runExec } from "./harness/orchestrator";
 import { InFlightRegistry } from "./harness/event-log";
+import { ActiveExecutionClock } from "./harness/isolation";
 import { SubprocessIsolationProvider } from "./harness/subprocess";
 import {
   AgentRunError,
@@ -96,6 +97,7 @@ export async function executeAgentRun(runId: string): Promise<void> {
   let environment: Awaited<ReturnType<SubprocessIsolationProvider["provision"]>> | undefined;
   let broker: LocalBroker | undefined;
   let assistantText = "";
+  const activeExecutionClock = new ActiveExecutionClock();
 
   try {
     const capabilities = await loadRunCapabilities(claimed);
@@ -120,9 +122,10 @@ export async function executeAgentRun(runId: string): Promise<void> {
       configuration,
       capabilities,
       capabilityToken,
-      controller.signal
+      controller.signal,
+      activeExecutionClock
     );
-    provider = new SubprocessIsolationProvider();
+    provider = new SubprocessIsolationProvider({ activeExecutionClock });
     environment = await provider.provision({
       profile: "chat",
       organizationId: claimed.run.organizationId,
@@ -371,7 +374,8 @@ function startInferenceBroker(
   expectedConfiguration: AgentRunConfigurationV1,
   capabilities: AgentRunCapabilitiesV1,
   capabilityToken: string,
-  executionSignal: AbortSignal
+  executionSignal: AbortSignal,
+  activeExecutionClock: ActiveExecutionClock
 ): LocalBroker {
   return Bun.serve({
     port: 0,
@@ -412,7 +416,8 @@ function startInferenceBroker(
         claimed,
         configuration,
         capabilities,
-        signal
+        signal,
+        activeExecutionClock
       );
       const encoder = new TextEncoder();
       return new Response(new ReadableStream({
@@ -432,7 +437,15 @@ function startInferenceBroker(
             }
             controller.close();
           } catch (error) {
-            controller.error(error);
+            if (!signal.aborted) {
+              controller.error(error);
+            } else {
+              // A cancelled run intentionally tears down the broker stream.
+              // Do not surface that expected abort as an unhandled stream error.
+              try {
+                controller.close();
+              } catch {}
+            }
           } finally {
             stopAuthorizationMonitor();
           }
@@ -477,7 +490,8 @@ async function* streamRunToolLoop(
   claimed: ClaimedRun,
   configuration: AgentRunConfigurationV1,
   capabilities: AgentRunCapabilitiesV1,
-  signal: AbortSignal
+  signal: AbortSignal,
+  activeExecutionClock: ActiveExecutionClock
 ) {
   const messages: Parameters<typeof streamLushAgentTurn>[0]["messages"] = [
     ...configuration.messages
@@ -547,12 +561,18 @@ async function* streamRunToolLoop(
             question: `Allow ${call.name} to run?`
           }
         };
-        const decision = await waitForToolApproval(
-          claimed,
-          attempt.approvalId,
-          attempt.expiresAt,
-          signal
-        );
+        const resumeExecutionClock = activeExecutionClock.pause();
+        let decision: "approved" | "denied" | "expired";
+        try {
+          decision = await waitForToolApproval(
+            claimed,
+            attempt.approvalId,
+            attempt.expiresAt,
+            signal
+          );
+        } finally {
+          resumeExecutionClock();
+        }
         await markRunApprovalResolved(claimed, call, attempt.approvalId, decision);
         attempt = decision === "approved"
           ? await executeRunTool(claimed, binding!, call, signal)
@@ -586,6 +606,9 @@ export async function scopedToolCallId(
   ordinal: number,
   providerCallId: string
 ) {
+  // Recovery cannot safely re-infer a parked tool turn: providers may return a
+  // different id or call order, producing a different gateway idempotency key.
+  // Durable parking must replay persisted calls from a checkpoint instead.
   const digest = await sha256Hex(canonicalJson({
     runId,
     turn,

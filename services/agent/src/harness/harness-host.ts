@@ -42,7 +42,9 @@ function blockHarness(): Harness {
         type: "outputs",
         messages: [textMessage("assistant", "blocking")]
       };
-      await new Promise<never>(() => {});
+      // Keep an actual event-loop handle alive. A never-settling Promise alone
+      // does not prevent Bun from exiting the subprocess.
+      await new Promise<void>((resolve) => setTimeout(resolve, 86_400_000));
       yield { type: "end", state: "completed" };
     }
   };

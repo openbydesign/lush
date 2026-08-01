@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import {
   InFlightRegistry,
   InMemoryEventLog,
+  ActiveExecutionClock,
   SubprocessIsolationProvider,
   runExec,
   textMessage,
@@ -126,6 +127,46 @@ describe("SubprocessIsolationProvider", () => {
       )
     ).rejects.toThrow();
     expect((await log.events("conv-timeout")).at(-1)!.state).toBe("failed");
+  }, 20_000);
+
+  test("does not charge paused approval time to the execution bound", async () => {
+    const activeExecutionClock = new ActiveExecutionClock();
+    const pausedProvider = new SubprocessIsolationProvider({ activeExecutionClock });
+    const environment = await pausedProvider.provision(
+      baseSpec({ harnessId: "block", sessionId: "conv-paused", limits: { wallClockMs: 200 } })
+    );
+    const log = new InMemoryEventLog();
+    const gen = runExec({
+      request: { conversationId: "conv-paused", inputs: [textMessage("user", "go")] },
+      log,
+      harness: environment.harness(),
+      inFlight: new InFlightRegistry(),
+      signal: signal()
+    });
+
+    try {
+      expect((await gen.next()).value).toEqual({
+        outputs: [textMessage("assistant", "blocking")],
+        step: 2
+      });
+      const resume = activeExecutionClock.pause();
+      const pending = gen.next().then(
+        (value) => ({ state: "resolved" as const, value }),
+        (error: unknown) => ({ state: "rejected" as const, error })
+      );
+
+      await Bun.sleep(300);
+      expect(await Promise.race([
+        pending,
+        Bun.sleep(0).then(() => ({ state: "pending" as const }))
+      ])).toEqual({ state: "pending" });
+
+      resume();
+      expect((await pending).state).toBe("rejected");
+      expect((await log.events("conv-paused")).at(-1)?.state).toBe("failed");
+    } finally {
+      await environment.destroy();
+    }
   }, 20_000);
 
   test("does not deadlock when a harness floods stderr", async () => {
