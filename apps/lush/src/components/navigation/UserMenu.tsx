@@ -19,22 +19,22 @@ export function UserMenu(props: {
         open={props.open}
         onOpenChange={props.onOpenChange}
         className="relative min-w-0"
-        contentClass="absolute bottom-[calc(100%+0.5rem)] left-0 w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-panel)] p-1 shadow-2xl shadow-[var(--shadow-menu)]"
+        contentClass="absolute bottom-[calc(100%+0.5rem)] left-0 w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-panel)] p-1 text-[13px] shadow-2xl shadow-[var(--shadow-menu)]"
         trigger={(dropdown) => (
           <button
             type="button"
             aria-expanded={dropdown.isOpen()}
             onClick={dropdown.toggle}
-            className="flex w-full min-w-0 items-center gap-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-panel)] p-2 text-left transition hover:border-[var(--color-border-strong)] hover:bg-[var(--color-panel-hover)]"
+            className="flex w-full min-w-0 items-center gap-2.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-panel)] p-2.5 text-left transition hover:border-[var(--color-border-strong)] hover:bg-[var(--color-panel-hover)]"
           >
-            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[var(--color-brand)] text-[0.6875rem] font-semibold text-white">
+            <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-[var(--color-brand)] text-[13px] font-semibold text-white">
               {getInitials(props.displayName)}
             </span>
             <span className="min-w-0 flex-1 overflow-hidden">
-              <span className="block truncate text-[0.6875rem] font-medium text-[var(--color-text)]">
+              <span className="block truncate text-[15px] font-medium text-[var(--color-text)]">
                 {props.displayName}
               </span>
-              <span className="block truncate text-[0.6875rem] text-[var(--color-muted)]">
+              <span className="block truncate text-[13px] text-[var(--color-muted)]">
                 {props.organizationName}
               </span>
             </span>
@@ -48,14 +48,14 @@ export function UserMenu(props: {
                 type="button"
                 onClick={() => props.onOrganizationSwitch(organization.id)}
                 disabled={organization.id === props.activeOrganizationId}
-                className={`block w-full rounded-md px-3 py-1.5 text-left text-[0.625rem] font-medium transition ${
+                className={`block w-full rounded-md px-3 py-1.5 text-left text-[13px] font-medium transition ${
                   organization.id === props.activeOrganizationId
                     ? "bg-[var(--color-panel-hover)] text-[var(--color-text)]"
                     : "text-[var(--color-subtle)] hover:bg-[var(--color-panel-hover)] hover:text-[var(--color-text)]"
                 }`}
               >
                 <span className="block truncate">{organization.name}</span>
-                <span className="block text-[0.5625rem] uppercase tracking-wide text-[var(--color-muted)]">
+                <span className="block text-[11px] uppercase tracking-wide text-[var(--color-muted)]">
                   {organization.role}
                 </span>
               </button>
@@ -63,7 +63,7 @@ export function UserMenu(props: {
           <Link
             to="/organizations/new"
             onClick={() => props.onOpenChange(false)}
-            className="block w-full rounded-md px-3 py-1.5 text-left text-[0.625rem] font-medium text-[var(--color-subtle)] transition hover:bg-[var(--color-panel-hover)] hover:text-[var(--color-text)]"
+            className="block w-full rounded-md px-3 py-1.5 text-left text-[13px] font-medium text-[var(--color-subtle)] transition hover:bg-[var(--color-panel-hover)] hover:text-[var(--color-text)]"
           >
             New organization
           </Link>
@@ -75,7 +75,7 @@ export function UserMenu(props: {
               key={route.href}
               type="button"
               onClick={props.onSignOut}
-              className="block w-full rounded-md px-3 py-1.5 text-left text-[0.625rem] font-medium text-[var(--color-subtle)] transition hover:bg-[var(--color-panel-hover)] hover:text-[var(--color-text)]"
+              className="block w-full rounded-md px-3 py-1.5 text-left text-[13px] font-medium text-[var(--color-subtle)] transition hover:bg-[var(--color-panel-hover)] hover:text-[var(--color-text)]"
             >
               {route.label}
             </button>
@@ -84,7 +84,7 @@ export function UserMenu(props: {
               key={route.href}
               to={route.href}
               onClick={() => props.onOpenChange(false)}
-              className="block w-full rounded-md px-3 py-1.5 text-left text-[0.625rem] font-medium text-[var(--color-subtle)] transition hover:bg-[var(--color-panel-hover)] hover:text-[var(--color-text)]"
+              className="block w-full rounded-md px-3 py-1.5 text-left text-[13px] font-medium text-[var(--color-subtle)] transition hover:bg-[var(--color-panel-hover)] hover:text-[var(--color-text)]"
             >
               {route.label}
             </Link>

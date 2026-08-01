@@ -19,6 +19,7 @@ import {
   type CreatableToolSource,
   type UserRole
 } from "@lush/api-client";
+import { ToolsLoadingSkeleton } from "../../components/LoadingSkeletons";
 
 type PendingApproval = {
   connectionId: string;
@@ -35,6 +36,7 @@ export function ToolsSettingsPage(props: {
   runApiRequest: <T>(operation: (sessionToken: string) => Promise<T>) => Promise<T>;
 }) {
   const [settings, setSettings] = useState<ToolGatewaySettings>();
+  const [loading, setLoading] = useState(true);
   const [connections, setConnections] = useState<ToolConnection[]>([]);
   const [definitions, setDefinitions] = useState<Record<string, ToolDefinition[]>>({});
   const [expanded, setExpanded] = useState("");
@@ -74,13 +76,15 @@ export function ToolsSettingsPage(props: {
 
   useEffect(() => {
     let active = true;
+    setLoading(true);
     void request((token) => getToolGatewaySettings(props.apiBaseUrl, token))
       .then(async (next) => {
         if (!active) return;
         setSettings(next);
         if (next.enabled) await loadConnections();
       })
-      .catch((cause) => active && setError(errorMessage(cause)));
+      .catch((cause) => active && setError(errorMessage(cause)))
+      .finally(() => active && setLoading(false));
     return () => {
       active = false;
     };
@@ -304,6 +308,9 @@ export function ToolsSettingsPage(props: {
     (connection) => !connection.systemManaged
   );
   const canAddConnection = !organizationMode || isAdmin;
+
+  if (loading) return <ToolsLoadingSkeleton />;
+
   const definitionDetails = (
     connection: ToolConnection,
     definition: ToolDefinition,
@@ -357,7 +364,7 @@ export function ToolsSettingsPage(props: {
     </div>
   );
   return (
-    <div className="grid max-w-4xl gap-4">
+    <div className="content-enter grid max-w-4xl gap-4">
       <section className="rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] p-4">
         <div className="flex items-start justify-between gap-4">
           <div>

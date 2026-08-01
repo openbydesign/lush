@@ -81,21 +81,21 @@ export function WorkspaceNav() {
         type="button"
         data-navigation-action
         onClick={startNewChat}
-        className="mb-1 flex w-full items-center gap-2 rounded-lg px-3 py-1.5 text-left text-xs font-medium text-[var(--color-subtle)] transition hover:bg-[var(--color-panel-hover)] hover:text-[var(--color-text)]"
+        className="mb-1 flex w-full items-center gap-1.5 rounded-lg px-3 py-1 text-left text-[10px] font-medium text-[var(--color-subtle)] transition hover:bg-[var(--color-panel-hover)] hover:text-[var(--color-text)]"
       >
-        <PlusIcon className="size-4" />
+        <PlusIcon className="size-3.5" />
         New
       </button>
 
       <Link
         to="/projects"
-        className={`mb-3 flex items-center gap-2 rounded-lg px-3 py-1.5 text-xs font-medium transition ${
+        className={`mb-3 flex items-center gap-1.5 rounded-lg px-3 py-1 text-[10px] font-medium transition ${
           location.pathname.startsWith("/projects")
             ? "bg-[var(--color-panel-hover)] text-[var(--color-text)]"
             : "text-[var(--color-subtle)] hover:bg-[var(--color-panel-hover)] hover:text-[var(--color-text)]"
         }`}
       >
-        <FolderIcon className="size-4" />
+        <FolderIcon className="size-3.5" />
         Projects
       </Link>
 
@@ -103,7 +103,7 @@ export function WorkspaceNav() {
 
       {pinnedProjects.length > 0 || pinnedSessions.length > 0 ? (
         <section className="mt-6">
-          <h2 className="mb-1 px-3 py-1 text-xs font-medium text-[var(--color-muted)]">
+          <h2 className="mb-1 px-3 py-1 text-[0.6875rem] font-medium text-[var(--color-muted)]">
             Pinned
           </h2>
           <div className="space-y-1">
@@ -111,9 +111,9 @@ export function WorkspaceNav() {
               <Link
                 key={project.id}
                 to={`/projects/${encodeURIComponent(project.id)}`}
-                className="flex items-center gap-2 rounded-md px-3 py-[0.3125rem] text-xs text-[var(--color-subtle)] transition hover:bg-[var(--color-panel-hover)] hover:text-[var(--color-text)]"
+                className="flex items-center gap-1.5 rounded-md px-3 py-0.5 text-[7px] text-[var(--color-subtle)] transition hover:bg-[var(--color-panel-hover)] hover:text-[var(--color-text)]"
               >
-                <FolderIcon className="size-3.5 shrink-0 text-[var(--color-muted)]" />
+                <FolderIcon className="size-3 shrink-0 text-[var(--color-muted)]" />
                 <span className="truncate">{project.name}</span>
               </Link>
             ))}
@@ -127,7 +127,7 @@ export function WorkspaceNav() {
           <button
             type="button"
             onClick={() => setRecentsOpen((current) => !current)}
-            className="flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-1 py-1 text-left text-xs font-medium text-[var(--color-muted)] hover:text-[var(--color-text)]"
+            className="flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-1 py-1 text-left text-[0.6875rem] font-medium text-[var(--color-muted)] hover:text-[var(--color-text)]"
           >
             Recents
             <ChevronDownIcon className={`size-3.5 transition ${recentsOpen ? "" : "-rotate-90"}`} />
@@ -144,14 +144,14 @@ export function WorkspaceNav() {
         </div>
 
         {recentsOpen ? (
-          <div className="space-y-2">
+          <div className="space-y-1">
             {recentSessions.length === 0 ? (
-              <p className="px-3 py-2 text-xs text-[var(--color-muted)]">No matching sessions</p>
+              <p className="px-3 py-2 text-[7px] text-[var(--color-muted)]">No matching sessions</p>
             ) : (
               groups.map((group) => (
                 <div key={group.key}>
                   {group.label ? (
-                    <div className="px-3 pb-1 pt-2 text-[0.625rem] font-medium uppercase tracking-wide text-[var(--color-muted)]">
+                    <div className="px-3 pb-1 pt-2 text-[0.5625rem] font-medium uppercase tracking-wide text-[var(--color-muted)]">
                       {group.label}
                     </div>
                   ) : null}
@@ -183,11 +183,11 @@ function SidebarSessionRow(props: {
       <Link
         to={props.session.href}
         title={props.session.title}
-        className={`session-title-button flex min-w-0 items-center gap-2 overflow-hidden px-3 py-[0.3125rem] pr-9 text-xs text-[var(--color-subtle)] hover:text-[var(--color-text)] ${
+        className={`session-title-button flex min-w-0 items-center gap-1.5 overflow-hidden px-3 py-1 pr-9 text-[7px] leading-[1.4] text-[var(--color-subtle)] hover:text-[var(--color-text)] ${
           longTitle ? "session-title-button--long" : ""
         }`}
       >
-        <SessionGlyph type={props.session.type} className="size-3.5 shrink-0 text-[var(--color-muted)]" />
+        <SessionGlyph type={props.session.type} className="size-3 shrink-0 text-[var(--color-muted)]" />
         <span className="session-title-viewport flex-1">
           <span className="session-title-track">
             <span className="session-title-text">{props.session.title}</span>

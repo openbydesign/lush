@@ -43,12 +43,12 @@ export function WorkspaceSessionNav(props: {
         type="button"
         data-navigation-action
         onClick={props.onNewSession}
-        className="mb-3 block w-full rounded-md border border-[var(--color-brand)] bg-[var(--color-brand)] px-3 py-1.5 text-left text-[0.625rem] font-medium text-white transition hover:border-[var(--color-brand-strong)] hover:bg-[var(--color-brand-strong)]"
+        className="mb-3 block w-full rounded-md border border-[var(--color-brand)] bg-[var(--color-brand)] px-3 py-1 text-left text-[10px] font-medium text-white transition hover:border-[var(--color-brand-strong)] hover:bg-[var(--color-brand-strong)]"
       >
         {props.newSessionLabel}
       </button>
 
-      <div className="mb-2 px-3 text-[0.5625rem] font-medium uppercase tracking-wide text-[var(--color-muted)]">
+      <div className="mb-2 px-3 text-[0.6875rem] font-medium uppercase tracking-wide text-[var(--color-muted)]">
         {props.sectionLabel}
       </div>
 
@@ -99,7 +99,7 @@ function WorkspaceSessionRow(props: {
       <Link
         to={item.href}
         title={item.title}
-        className={`session-title-button block w-full min-w-0 max-w-full overflow-hidden px-3 py-1.5 pr-9 text-left text-[0.625rem] font-medium transition ${
+        className={`session-title-button block w-full min-w-0 max-w-full overflow-hidden px-3 py-0.5 pr-9 text-left text-[7px] font-medium transition ${
           props.active
             ? "text-[var(--color-text)]"
             : "text-[var(--color-subtle)] hover:text-[var(--color-text)]"
@@ -114,7 +114,7 @@ function WorkspaceSessionRow(props: {
           </span>
         </span>
         {item.metadata ? (
-          <span className="block truncate text-[0.5625rem] font-normal text-[var(--color-muted)]">
+          <span className="block truncate text-[7px] font-normal text-[var(--color-muted)]">
             {item.metadata}
           </span>
         ) : null}

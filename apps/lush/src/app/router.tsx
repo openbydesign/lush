@@ -10,6 +10,10 @@ import {
   useRouteError
 } from "react-router-dom";
 import { AppProvider, useApp } from "../App";
+import {
+  AppLoadingSkeleton,
+  AuthLoadingSkeleton
+} from "../components/LoadingSkeletons";
 import { TooltipProvider } from "../components/ui/tooltip";
 import { CodeProvider } from "../features/code/CodeProvider";
 import { routes } from "../lib/app-data";
@@ -141,9 +145,10 @@ export function AppRouter() {
 }
 
 function AppRoot() {
+  const location = useLocation();
   return (
     <main className="h-screen overflow-hidden bg-[var(--color-bg)] text-[var(--color-text)]">
-      <Suspense fallback={null}>
+      <Suspense fallback={<AppLoadingSkeleton path={location.pathname} />}>
         <Outlet />
       </Suspense>
     </main>
@@ -152,14 +157,14 @@ function AppRoot() {
 
 function IndexRoute() {
   const app = useApp();
-  if (app.sessionStatus === "loading") return null;
+  if (app.sessionStatus === "loading") return <AppLoadingSkeleton />;
   if (!app.isAuthenticated) return <Navigate to="/sign-in" replace />;
   return <Navigate to={app.hasActiveOrganization ? "/sessions" : "/organizations/new"} replace />;
 }
 
 function PublicOnlyRoute() {
   const app = useApp();
-  if (app.sessionStatus === "loading") return null;
+  if (app.sessionStatus === "loading") return <AuthLoadingSkeleton />;
   if (app.isAuthenticated) {
     return <Navigate to={app.hasActiveOrganization ? "/sessions" : "/organizations/new"} replace />;
   }
@@ -169,7 +174,9 @@ function PublicOnlyRoute() {
 function AuthenticatedRoute() {
   const app = useApp();
   const location = useLocation();
-  if (app.sessionStatus === "loading") return null;
+  if (app.sessionStatus === "loading") {
+    return <AppLoadingSkeleton path={location.pathname} />;
+  }
   if (!app.isAuthenticated) {
     return (
       <Navigate
@@ -286,6 +293,8 @@ function ToolsSettingsRoute({ mode }: { mode: "organization" | "personal" }) {
 
 function ChatRoute() {
   const app = useApp();
+  const { sessionId } = useParams();
+
   return (
     <ChatPage
       displayName={app.resolvedDisplayName}
@@ -296,6 +305,7 @@ function ChatRoute() {
       runApiRequest={app.runApiRequest}
       session={app.activeChatSession}
       sessionKey={app.chatSessionKey}
+      loading={Boolean(sessionId && sessionId !== app.activeChatSession?.id)}
       ensureSession={app.ensureSession}
       onCreateSession={app.createChatSession}
       onTruncateSession={app.truncateChatSession}

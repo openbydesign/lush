@@ -39,7 +39,7 @@ function SettingsSection(props: {
 }) {
   return (
     <div>
-      <div className="mb-2 px-3 text-[0.5625rem] font-medium uppercase tracking-wide text-[var(--color-muted)]">
+      <div className="mb-2 px-3 text-[0.6875rem] font-medium uppercase tracking-wide text-[var(--color-muted)]">
         {props.title}
       </div>
       <div className="space-y-1">
