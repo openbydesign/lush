@@ -53,6 +53,7 @@ import {
   ReasoningContent,
   ReasoningTrigger
 } from "../../components/ai-elements/reasoning";
+import { DiffLoadingSkeleton } from "../../components/LoadingSkeletons";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import {
@@ -558,11 +559,11 @@ function ChangesView({
 
       <div className="min-h-0 flex-1 overflow-y-auto scroll-smooth pr-2">
         {loading && !review ? (
-          <div className="flex h-full items-center justify-center"><LoaderCircleIcon className="size-5 animate-spin text-[var(--color-muted)]" /></div>
+          <DiffLoadingSkeleton />
         ) : error ? (
-          <div className="flex h-full items-center justify-center px-6 text-center text-sm text-red-600 dark:text-red-400">{error}</div>
+          <div className="content-enter flex h-full items-center justify-center px-6 text-center text-sm text-red-600 dark:text-red-400">{error}</div>
         ) : review?.snapshot.files.length ? (
-          <div className="space-y-4 pb-2">
+          <div className="content-enter space-y-4 pb-2">
             {review.snapshot.files.map((file) => {
               const fileDiff = findParsedFile(parsedFiles, file.path);
               return (
@@ -616,7 +617,7 @@ function ChangesView({
             })}
           </div>
         ) : (
-          <div className="flex h-full items-center justify-center px-6 text-center text-sm text-[var(--color-muted)]">No changes in this revision.</div>
+          <div className="content-enter flex h-full items-center justify-center px-6 text-center text-sm text-[var(--color-muted)]">No changes in this revision.</div>
         )}
       </div>
     </div>

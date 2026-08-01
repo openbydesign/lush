@@ -61,7 +61,7 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
   const notice = (location.state as { notice?: unknown } | null)?.notice;
 
   return (
-    <section className="flex h-screen items-center justify-center px-6">
+    <section className="content-enter flex h-screen items-center justify-center px-6">
       <form
         onSubmit={submit}
         className="grid w-full max-w-sm gap-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] p-5"

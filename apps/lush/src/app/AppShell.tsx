@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
 import {
   MenuIcon,
@@ -6,6 +6,7 @@ import {
   PanelLeftOpenIcon
 } from "lucide-react";
 import { useApp } from "../App";
+import { RouteLoadingSkeleton } from "../components/LoadingSkeletons";
 import logoUrl from "../assets/lush-logo.svg?url";
 import {
   Dialog,
@@ -35,7 +36,8 @@ export function AppShell() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(
     readSidebarCollapsed
   );
-  const [userMenuOpen, setUserMenuOpen] = useState(false);
+  const [desktopUserMenuOpen, setDesktopUserMenuOpen] = useState(false);
+  const [mobileUserMenuOpen, setMobileUserMenuOpen] = useState(false);
   const sessionMatch = matchWorkspaceSessionPath(path);
   const activeWorkspaceRoute =
     sessionMatch?.route ?? routes.find((route) => route.href === path);
@@ -56,13 +58,22 @@ export function AppShell() {
 
   useEffect(() => {
     setMobileNavigationOpen(false);
+    setMobileUserMenuOpen(false);
   }, [path]);
 
   const switchOrganization = async (organizationId: string) => {
     await app.switchActiveOrganization(organizationId);
-    setUserMenuOpen(false);
+    setDesktopUserMenuOpen(false);
+    setMobileUserMenuOpen(false);
     setMobileNavigationOpen(false);
     navigate("/sessions", { replace: true });
+  };
+
+  const updateMobileNavigationOpen = (open: boolean) => {
+    setMobileNavigationOpen(open);
+    if (!open) {
+      setMobileUserMenuOpen(false);
+    }
   };
 
   const updateSidebarCollapsed = (collapsed: boolean) => {
@@ -77,14 +88,17 @@ export function AppShell() {
       <WorkspaceNav />
     );
 
-  const accountMenu = () => (
+  const accountMenu = (
+    open: boolean,
+    onOpenChange: (open: boolean) => void
+  ) => (
     <UserMenu
-      open={userMenuOpen}
+      open={open}
       displayName={app.resolvedDisplayName}
       organizationName={app.resolvedOrganizationName}
       activeOrganizationId={app.activeOrganizationId}
       organizations={app.organizations}
-      onOpenChange={setUserMenuOpen}
+      onOpenChange={onOpenChange}
       onSignOut={() => void app.signOut()}
       onOrganizationSwitch={(organizationId) => {
         void switchOrganization(organizationId).catch(() => undefined);
@@ -95,14 +109,14 @@ export function AppShell() {
   const brandLink = () => (
     <Link
       to="/sessions"
-      className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden text-sm font-semibold text-[var(--color-text)]"
+      className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden text-xs font-semibold text-[var(--color-text)]"
     >
       <img src={logoUrl} alt="Lush" className="size-8 shrink-0" />
       <span>Lush</span>
       {activeWorkspaceLabel ? (
         <>
           <span className="h-4 w-px shrink-0 bg-[var(--color-border-strong)]" />
-          <span className="truncate rounded-md bg-[var(--color-panel)] px-2 py-1 text-xs font-medium text-[var(--color-subtle)]">
+          <span className="truncate rounded-md bg-[var(--color-panel)] px-2 py-1 text-[0.625rem] font-medium text-[var(--color-subtle)]">
             {activeWorkspaceLabel}
           </span>
         </>
@@ -117,7 +131,7 @@ export function AppShell() {
           <button
             type="button"
             aria-label="Open navigation"
-            onClick={() => setMobileNavigationOpen(true)}
+            onClick={() => updateMobileNavigationOpen(true)}
             className="flex size-9 shrink-0 items-center justify-center rounded-md text-[var(--color-subtle)] transition hover:bg-[var(--color-panel-hover)] hover:text-[var(--color-text)]"
           >
             <MenuIcon className="size-5" />
@@ -166,7 +180,7 @@ export function AppShell() {
             </ScrollFade>
           </nav>
 
-          {accountMenu()}
+          {accountMenu(desktopUserMenuOpen, setDesktopUserMenuOpen)}
         </aside>
 
         <section className="relative min-h-0 min-w-0 overflow-y-auto py-3 sm:py-4 lg:pr-2">
@@ -181,16 +195,20 @@ export function AppShell() {
               <PanelLeftOpenIcon className="size-4" />
             </button>
           ) : null}
-          <Outlet />
+          <Suspense fallback={<RouteLoadingSkeleton path={path} />}>
+            <div className="content-enter h-full">
+              <Outlet />
+            </div>
+          </Suspense>
         </section>
       </div>
 
-      <Dialog open={mobileNavigationOpen} onOpenChange={setMobileNavigationOpen}>
+      <Dialog open={mobileNavigationOpen} onOpenChange={updateMobileNavigationOpen}>
         <DialogContent
           aria-describedby={undefined}
           className="top-0 left-0 grid h-dvh w-[min(20rem,calc(100vw-2rem))] max-w-none -translate-x-0 -translate-y-0 grid-rows-[auto_minmax(0,1fr)_auto] gap-0 rounded-none border-y-0 border-l-0 p-4 sm:max-w-xs lg:hidden"
         >
-          <DialogTitle className="mb-5 flex items-center gap-2 pr-10">
+          <DialogTitle className="mb-5 flex items-center gap-2 pr-10 text-xs">
             <img src={logoUrl} alt="" className="size-8" />
             {activeWorkspaceLabel ?? "Lush"}
           </DialogTitle>
@@ -199,13 +217,13 @@ export function AppShell() {
             onClickCapture={(event) => {
               const target = event.target as HTMLElement;
               if (target.closest("a") || target.closest("[data-navigation-action]")) {
-                setMobileNavigationOpen(false);
+                updateMobileNavigationOpen(false);
               }
             }}
           >
             {workspaceNavigation()}
           </nav>
-          {accountMenu()}
+          {accountMenu(mobileUserMenuOpen, setMobileUserMenuOpen)}
         </DialogContent>
       </Dialog>
     </section>

@@ -13,6 +13,7 @@ import {
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useApp } from "../../App";
+import { ProjectLoadingSkeleton } from "../../components/LoadingSkeletons";
 import { Button } from "../../components/ui/button";
 import {
   DropdownMenu,
@@ -71,7 +72,7 @@ export function ProjectPage(props: { projectId: string }) {
     };
   }, [props.projectId]);
 
-  if (loading) return null;
+  if (loading) return <ProjectLoadingSkeleton />;
   if (!project) {
     return (
       <div className="mx-auto max-w-3xl px-4 py-12">
@@ -145,7 +146,7 @@ export function ProjectPage(props: { projectId: string }) {
   );
 
   return (
-    <div className="mx-auto w-full max-w-6xl px-1 pb-12 pt-1 sm:px-4">
+    <div className="content-enter mx-auto w-full max-w-6xl px-1 pb-12 pt-1 sm:px-4">
       <div className="mb-8 flex items-center gap-2 text-xs text-[var(--color-muted)]">
         <Link to="/projects" className="hover:text-[var(--color-text)]">Projects</Link>
         <span>/</span>

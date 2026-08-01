@@ -36,13 +36,13 @@ export function PrimaryNav() {
         <NavLink
           key={item.href}
           to={item.href}
-          className={({ isActive }) => `flex items-center gap-2 rounded-lg px-3 py-1.5 text-xs font-medium transition ${
+          className={({ isActive }) => `flex items-center gap-1.5 rounded-lg px-3 py-1 text-[10px] font-medium transition ${
             isActive
               ? "bg-[var(--color-panel-hover)] text-[var(--color-text)]"
               : "text-[var(--color-subtle)] hover:bg-[var(--color-panel-hover)] hover:text-[var(--color-text)]"
           }`}
         >
-          <Icon className="size-4" />
+          <Icon className="size-3.5" />
           {item.label}
         </NavLink>
         );

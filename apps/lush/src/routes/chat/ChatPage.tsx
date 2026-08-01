@@ -10,6 +10,7 @@ import {
 } from "@lush/api-client";
 import { EmptyChatState } from "../../components/chat/EmptyChatState";
 import { SessionToolsMenu } from "../../components/chat/SessionToolsMenu";
+import { ChatTranscriptLoadingSkeleton } from "../../components/LoadingSkeletons";
 import {
   Attachment,
   AttachmentInfo,
@@ -104,6 +105,7 @@ export function ChatPage(props: {
   ) => Promise<T>;
   session?: Session;
   sessionKey: number;
+  loading: boolean;
   ensureSession: (force?: boolean) => Promise<string | undefined>;
   onCreateSession: (request: {
     title: string;
@@ -180,6 +182,8 @@ export function ChatPage(props: {
   const composerFocusRequest = readComposerFocusRequest(location.state);
   const projectChatState = readProjectChatState(location.state);
   const hasMessages = messages.length > 0;
+  const transcriptLoading =
+    props.loading || props.sessionKey !== syncedSessionKeyRef.current;
   const enabledModelSelections =
     props.providers.flatMap((provider) =>
       provider.models.map((model) => `${provider.id}:${model.id}`)
@@ -602,7 +606,8 @@ export function ChatPage(props: {
       (!content && prompt.files.length === 0) ||
       isStreaming ||
       isStopping ||
-      isRewriting
+      isRewriting ||
+      transcriptLoading
     ) return;
 
     const attachments = await promptAttachments(prompt.files);
@@ -747,62 +752,68 @@ export function ChatPage(props: {
   };
 
   return (
-    <div className="relative h-full min-h-0 overflow-hidden">
+    <div className="content-enter relative h-full min-h-0 overflow-hidden">
       <MessageScroller
         resetKey={scrollerResetKey}
         busy={isStreaming}
         bottomInset={composerHeight}
       >
-        {hasMessages ? (
-          messages.map((message) => (
-            <MessageScrollerItem
-              key={message.id}
-              messageId={message.id}
-              animateEntrance={message.animateEntrance}
-            >
-              <Message
-                message={message}
-                initialFeedback={feedbackForMessage(
-                  props.session,
-                  message.serverId ?? message.id
-                )}
-                onFeedback={
-                  activeSessionId && message.serverId
-                    ? (messageId, sentiment) =>
-                        props.onMessageFeedback(
-                          activeSessionId,
-                          messageId,
-                          sentiment
-                        )
-                    : undefined
-                }
-                onRetry={
-                  message.role === "user" && activeSessionId && message.serverId
-                    ? () => retryMessage(message)
-                    : undefined
-                }
-                onEdit={
-                  message.role === "user" &&
-                  activeSessionId &&
-                  message.serverId &&
-                  chatMessageText(message)
-                    ? () => editMessage(message)
-                    : undefined
-                }
-                actionsDisabled={isStreaming || isStopping || isRewriting}
-                onToolApproval={(approvalId, approve) =>
-                  props.runApiRequest((token) =>
-                    decideToolApproval(props.apiBaseUrl, approvalId, token, { approve })
-                  )
-                }
-              />
-            </MessageScrollerItem>
-          ))
+        {transcriptLoading ? (
+          <ChatTranscriptLoadingSkeleton />
         ) : (
-          <EmptyChatState
-            greeting={greeting}
-            onUseSuggestion={useSuggestion}
-          />
+          <div key={props.sessionKey} className="content-enter flex flex-col gap-8">
+            {hasMessages ? (
+              messages.map((message) => (
+                <MessageScrollerItem
+                  key={message.id}
+                  messageId={message.id}
+                  animateEntrance={message.animateEntrance}
+                >
+                  <Message
+                    message={message}
+                    initialFeedback={feedbackForMessage(
+                      props.session,
+                      message.serverId ?? message.id
+                    )}
+                    onFeedback={
+                      activeSessionId && message.serverId
+                        ? (messageId, sentiment) =>
+                            props.onMessageFeedback(
+                              activeSessionId,
+                              messageId,
+                              sentiment
+                            )
+                        : undefined
+                    }
+                    onRetry={
+                      message.role === "user" && activeSessionId && message.serverId
+                        ? () => retryMessage(message)
+                        : undefined
+                    }
+                    onEdit={
+                      message.role === "user" &&
+                      activeSessionId &&
+                      message.serverId &&
+                      chatMessageText(message)
+                        ? () => editMessage(message)
+                        : undefined
+                    }
+                    actionsDisabled={isStreaming || isStopping || isRewriting}
+                    onToolApproval={(approvalId, approve) =>
+                      props.runApiRequest((token) =>
+                        decideToolApproval(props.apiBaseUrl, approvalId, token, { approve })
+                      )
+                    }
+                  />
+                </MessageScrollerItem>
+              ))
+            ) : (
+              <EmptyChatState
+                greeting={greeting}
+                onUseSuggestion={useSuggestion}
+              />
+            )}
+          </div>
         )}
       </MessageScroller>
 
@@ -860,7 +871,7 @@ export function ChatPage(props: {
                       apiBaseUrl={props.apiBaseUrl}
                       runApiRequest={props.runApiRequest}
                       disabledToolDefinitionIds={disabledToolDefinitionIds}
-                      disabled={isStreaming || isStopping}
+                      disabled={isStreaming || isStopping || transcriptLoading}
                       onChange={selectTools}
                       onManageTools={() => navigate("/settings/my-tools")}
                     />
@@ -872,7 +883,7 @@ export function ChatPage(props: {
                     <PromptInputSelect
                       value={activeModelSelection}
                       onValueChange={(value) => selectModel(value ?? "")}
-                      disabled={isStreaming || isStopping}
+                      disabled={isStreaming || isStopping || transcriptLoading}
                     >
                       <PromptInputSelectTrigger className="max-w-52">
                         <PromptInputSelectValue placeholder="Select model">
@@ -911,7 +922,7 @@ export function ChatPage(props: {
                 error={error}
                 isStreaming={isStreaming}
                 isStopping={isStopping}
-                disabled={isRewriting || isStopping}
+                disabled={isRewriting || isStopping || transcriptLoading}
                 modelSelection={activeModelSelection}
                 onStop={stop}
               />
