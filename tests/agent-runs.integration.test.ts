@@ -6,7 +6,8 @@ import { createInferenceProvider } from "../services/inference/src/runtime";
 import { decideToolApproval } from "../services/tools/src/gateway";
 import {
   executeAgentRun,
-  nextBrokerEventOrHeartbeat
+  nextBrokerEventOrHeartbeat,
+  scopedToolCallId
 } from "../services/agent/src/run-executor";
 import {
   cancelAgentRun,
@@ -32,11 +33,14 @@ if (!databaseUrl) {
     let adminDb: ReturnType<typeof createDb>;
     let previousDatabaseUrl: string | undefined;
     let previousSecretKey: string | undefined;
+    let previousToolsPrivateEgress: string | undefined;
 
     beforeAll(async () => {
       previousDatabaseUrl = process.env.DATABASE_URL;
       previousSecretKey = process.env.LUSH_SECRET_KEY;
+      previousToolsPrivateEgress = process.env.LUSH_TOOLS_ALLOW_PRIVATE_EGRESS;
       process.env.LUSH_SECRET_KEY = "durable-run-test-secret";
+      process.env.LUSH_TOOLS_ALLOW_PRIVATE_EGRESS = "true";
       schemaName = `test_${crypto.randomUUID().replace(/-/g, "")}`;
       adminDb = createDb({ databaseUrl });
       await sql`create schema ${sql.ref(schemaName)}`.execute(adminDb);
@@ -53,6 +57,7 @@ if (!databaseUrl) {
       await adminDb.destroy();
       restoreEnv("DATABASE_URL", previousDatabaseUrl);
       restoreEnv("LUSH_SECRET_KEY", previousSecretKey);
+      restoreEnv("LUSH_TOOLS_ALLOW_PRIVATE_EGRESS", previousToolsPrivateEgress);
     });
 
     test("the inference broker keeps an approval wait alive with heartbeats", async () => {
@@ -592,13 +597,19 @@ if (!databaseUrl) {
         const assistant = await getDb().selectFrom("sessionMessages")
           .select(["content", "metadata"]).where("id", "=", run.assistantMessageId!)
           .executeTakeFirstOrThrow();
+        const expectedToolCallId = await scopedToolCallId(
+          created.run.id,
+          0,
+          0,
+          "call-weather"
+        );
         expect(assistant.content).toBe("Air quality checked.");
         expect(assistant.metadata).toMatchObject({
           schema: "lush.message.parts.v1",
           parts: [
             expect.objectContaining({
               type: "tool",
-              toolCallId: "call-weather",
+              toolCallId: expectedToolCallId,
               toolTitle: "Air quality",
               connectionLabel: "Built-in",
               connectionSource: "openapi",

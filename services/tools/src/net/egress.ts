@@ -344,6 +344,7 @@ async function pinnedRequest(
   const request = url.protocol === "https:" ? httpsRequest : httpRequest;
 
   return new Promise<Response>((resolve, reject) => {
+    let settled = false;
     const req = request(
       {
         protocol: url.protocol,
@@ -373,6 +374,7 @@ async function pinnedRequest(
         const responseBody = bodyForbidden
           ? null
           : (Readable.toWeb(incoming) as ReadableStream<Uint8Array>);
+        settled = true;
         resolve(
           new Response(responseBody, {
             status,
@@ -383,13 +385,30 @@ async function pinnedRequest(
       }
     );
 
-    const abort = () => req.destroy(new DOMException("The operation was aborted", "AbortError"));
+    const abort = () => {
+      const reason = init.signal?.reason;
+      const error = reason instanceof Error
+        ? reason
+        : new DOMException("The operation was aborted", "AbortError");
+      req.destroy(error);
+      // Bun does not consistently emit an error after destroying a pending
+      // node:http request, so settle the promise directly as well.
+      if (!settled) {
+        settled = true;
+        reject(error);
+      }
+    };
     if (init.signal?.aborted) {
       abort();
     } else {
       init.signal?.addEventListener("abort", abort, { once: true });
     }
-    req.once("error", reject);
+    req.once("error", (error) => {
+      if (!settled) {
+        settled = true;
+        reject(error);
+      }
+    });
     req.once("close", () => init.signal?.removeEventListener("abort", abort));
     req.end(body);
   });
