@@ -13,6 +13,7 @@
   "exports": {
     "./openai-compatible": "./src/openai-compatible.ts",
     "./spec": "./src/spec.ts",
-    "./runtime": "./src/runtime.ts"
+    "./runtime": "./src/runtime.ts",
+    "./tool-chat": "./src/tool-chat.ts"
   }
 }

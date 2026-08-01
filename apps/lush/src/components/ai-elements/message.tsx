@@ -323,7 +323,7 @@ export const MessageResponse = memo(
   ({ children, className, plugins, ...props }: MessageResponseProps) => (
     <Streamdown
       className={cn(
-        "lush-markdown size-full [&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
+        "lush-markdown w-full [&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
         className
       )}
       plugins={{ ...plugins, math: plugins?.math ?? math }}

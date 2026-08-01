@@ -6,6 +6,12 @@ import type {
   InferenceProviderModelRow
 } from "@lush/db/schema";
 import { adapterForProvider } from "./providers";
+import {
+  streamProviderToolTurn,
+  type InferenceTool,
+  type InferenceTurnEvent,
+  type InferenceTurnMessage
+} from "./tool-chat";
 
 export type InferenceChatMessage = {
   role: "user" | "assistant";
@@ -52,6 +58,17 @@ export type StreamInferenceChatOptions = {
   messages: InferenceChatMessage[];
   signal: AbortSignal;
 };
+
+export type StreamInferenceTurnOptions = {
+  organizationId: string;
+  modelSelection?: string;
+  systemPrompt: string;
+  messages: Exclude<InferenceTurnMessage, { role: "system" }>[];
+  tools: InferenceTool[];
+  signal: AbortSignal;
+};
+
+export type { InferenceTool, InferenceTurnEvent, InferenceTurnMessage };
 
 const workspaceModes: WorkspaceMode[] = ["chat", "code", "work", "agents"];
 const emptyModelDefaults: ModelDefaults = {
@@ -393,6 +410,32 @@ export async function* streamInferenceChat({
     apiKey: connectedModel.provider.apiKey,
     modelId: connectedModel.modelId,
     messages: chatMessages,
+    signal
+  });
+}
+
+export async function* streamInferenceTurn({
+  organizationId,
+  modelSelection,
+  systemPrompt,
+  messages,
+  tools,
+  signal
+}: StreamInferenceTurnOptions): AsyncGenerator<InferenceTurnEvent> {
+  const connectedModel = await resolveConnectedModel(organizationId, modelSelection);
+  if (!connectedModel) {
+    throw new InferenceError(
+      "model_not_configured",
+      "No enabled inference model is configured for this organization"
+    );
+  }
+  yield* streamProviderToolTurn({
+    kind: connectedModel.provider.kind,
+    baseUrl: connectedModel.provider.baseUrl,
+    apiKey: connectedModel.provider.apiKey,
+    modelId: connectedModel.modelId,
+    messages: [{ role: "system", content: systemPrompt }, ...messages],
+    tools,
     signal
   });
 }

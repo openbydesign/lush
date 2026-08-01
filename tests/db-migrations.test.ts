@@ -34,8 +34,19 @@ test("database migration ids match their ordinal prefix", () => {
     "016_tool_gateway_rollout_convergence",
     "017_builtin_tool_connections",
     "018_builtin_tool_enablement",
-    "019_retire_current_time_tool"
+    "019_retire_current_time_tool",
+    "020_tool_call_definition_digest",
+    "021_tool_definition_timeout"
   ]);
+});
+
+test("tool definitions support bounded timeout overrides", async () => {
+  const migration = await Bun.file(
+    "packages/db/src/migrations/021_tool_definition_timeout.ts"
+  ).text();
+
+  expect(migration).toContain("add column if not exists timeout_ms integer");
+  expect(migration).toContain("timeout_ms between 1000 and 90000");
 });
 
 test("durable agent runs are append-only, scoped, and resumable", async () => {

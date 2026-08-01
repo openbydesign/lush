@@ -25,10 +25,8 @@ export function MessageScroller(props: {
     <MessageScrollerProvider
       key={props.resetKey}
       autoScroll
-      defaultScrollPosition="last-anchor"
+      defaultScrollPosition="end"
       scrollEdgeThreshold={40}
-      scrollPreviousItemPeek={64}
-      scrollMargin={32}
     >
       <ShadcnMessageScroller className="relative min-h-0 flex-1">
         <MessageScrollerViewport className="h-full overflow-y-auto pr-3">

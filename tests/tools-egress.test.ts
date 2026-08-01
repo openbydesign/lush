@@ -154,6 +154,35 @@ describe("assertSafeUrl", () => {
 });
 
 describe("safeFetch", () => {
+  test("rejects promptly when a pending request is aborted", async () => {
+    const server = Bun.serve({
+      port: 0,
+      hostname: "127.0.0.1",
+      async fetch() {
+        await Bun.sleep(200);
+        return new Response("too late");
+      }
+    });
+    try {
+      const policy: EgressPolicy = {
+        allowInsecureHttp: true,
+        allowPrivateHosts: true,
+        maxRedirects: 0
+      };
+      const reason = new Error("deadline exceeded");
+      const controller = new AbortController();
+      setTimeout(() => controller.abort(reason), 10);
+
+      await expect(safeFetch(
+        `http://127.0.0.1:${server.port}/slow`,
+        { signal: controller.signal },
+        policy
+      )).rejects.toBe(reason);
+    } finally {
+      server.stop(true);
+    }
+  });
+
   test("connects to the validated address without re-resolving DNS", async () => {
     const server = Bun.serve({
       port: 0,

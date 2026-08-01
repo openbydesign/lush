@@ -32,6 +32,7 @@ import { envValue } from "@lush/config/env";
 import type { Harness, HarnessResponse, HarnessStart } from "./protocol";
 import {
   IsolationError,
+  type ActiveExecutionClock,
   resolveLimits,
   type AgentEnvironmentHandle,
   type EnvironmentLimits,
@@ -54,6 +55,8 @@ export type SubprocessProviderOptions = {
   /** Env var names the child may inherit. Everything else is stripped. */
   envAllowlist?: string[];
   limits?: Partial<EnvironmentLimits>;
+  /** Pauses the active-time budget while the orchestrator awaits a human. */
+  activeExecutionClock?: ActiveExecutionClock;
 };
 
 export class SubprocessIsolationProvider implements IsolationProvider {
@@ -86,7 +89,8 @@ export class SubprocessIsolationProvider implements IsolationProvider {
           args: [hostScript, spec.harnessId],
           env: childEnv,
           cwd: workspace,
-          limits
+          limits,
+          activeExecutionClock: this.options.activeExecutionClock
         }),
       hibernate: async () => {},
       destroy: async () => {
@@ -136,6 +140,7 @@ type SubprocessHarnessOptions = {
   env: Record<string, string>;
   cwd: string;
   limits: EnvironmentLimits;
+  activeExecutionClock?: ActiveExecutionClock;
 };
 
 class SubprocessHarness implements Harness {
@@ -158,10 +163,41 @@ class SubprocessHarness implements Harness {
     });
 
     let timedOut = false;
-    const killTimer = setTimeout(() => {
+    let remainingMs = this.options.limits.wallClockMs;
+    let activeSince: number | null = null;
+    let killTimer: ReturnType<typeof setTimeout> | undefined;
+    const expire = () => {
       timedOut = true;
+      remainingMs = 0;
+      activeSince = null;
+      killTimer = undefined;
       child.kill("SIGKILL");
-    }, this.options.limits.wallClockMs);
+    };
+    const pauseTimer = () => {
+      if (activeSince !== null) {
+        remainingMs = Math.max(0, remainingMs - (performance.now() - activeSince));
+        activeSince = null;
+      }
+      if (killTimer) {
+        clearTimeout(killTimer);
+        killTimer = undefined;
+      }
+    };
+    const resumeTimer = () => {
+      if (timedOut || killTimer || activeSince !== null) return;
+      if (remainingMs <= 0) {
+        expire();
+        return;
+      }
+      activeSince = performance.now();
+      killTimer = setTimeout(expire, remainingMs);
+    };
+    const onClockChange = (paused: boolean) => {
+      if (paused) pauseTimer();
+      else resumeTimer();
+    };
+    const stopClock = this.options.activeExecutionClock?.subscribe(onClockChange);
+    if (!this.options.activeExecutionClock?.paused) resumeTimer();
 
     const onAbort = () => child.kill("SIGKILL");
     if (signal.aborted) {
@@ -238,7 +274,8 @@ class SubprocessHarness implements Harness {
       // Fall through: no end frame and no known cause -> orchestrator raises a
       // protocol error.
     } finally {
-      clearTimeout(killTimer);
+      pauseTimer();
+      stopClock?.();
       signal.removeEventListener("abort", onAbort);
       if (child.exitCode === null && child.signalCode === null) {
         child.kill("SIGKILL");

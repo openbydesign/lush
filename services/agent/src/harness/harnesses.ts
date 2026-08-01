@@ -9,8 +9,11 @@
  */
 
 import {
+  confirmationMessage,
   lastUserText,
   textMessage,
+  toolCallMessage,
+  toolResultMessage,
   type Message,
   type ToolCallContent
 } from "./content";
@@ -71,11 +74,15 @@ export function brokeredLushHarness(id = "lush-brokered"): Harness {
         throw new Error(`Inference broker rejected the run (${response.status})`);
       }
 
-      for await (const delta of coalesceBrokerDeltas(readBrokerDeltas(response.body))) {
-        yield {
-          type: "outputs",
-          messages: [textMessage("assistant", delta)]
-        };
+      for await (const event of readBrokerEvents(response.body)) {
+        const message = event.type === "text_delta"
+          ? textMessage("assistant", event.delta)
+          : event.type === "tool_call"
+            ? toolCallMessage(event.call)
+            : event.type === "tool_approval"
+              ? confirmationMessage(event.approval)
+              : toolResultMessage(event.result);
+        yield { type: "outputs", messages: [message] };
       }
       yield { type: "end", state: "completed" };
     }
@@ -100,7 +107,33 @@ function normalizeBrokeredConfig(value: unknown): BrokeredLushConfig {
   return candidate as BrokeredLushConfig;
 }
 
-async function* readBrokerDeltas(body: ReadableStream<Uint8Array>) {
+type BrokerEvent =
+  | { type: "text_delta"; delta: string }
+  | {
+      type: "tool_call";
+      call: { id: string; name: string; arguments: Record<string, unknown> };
+    }
+  | {
+      type: "tool_result";
+      result: {
+        callId: string;
+        name: string;
+        response: unknown;
+        isError?: boolean;
+      };
+    }
+  | {
+      type: "tool_approval";
+      approval: {
+        id: string;
+        toolCallId: string;
+        toolName: string;
+        expiresAt: string;
+        question?: string;
+      };
+    };
+
+async function* readBrokerEvents(body: ReadableStream<Uint8Array>) {
   const decoder = new TextDecoder();
   let buffer = "";
   for await (const chunk of body as AsyncIterable<Uint8Array>) {
@@ -109,13 +142,13 @@ async function* readBrokerDeltas(body: ReadableStream<Uint8Array>) {
     while (newline >= 0) {
       const line = buffer.slice(0, newline).trim();
       buffer = buffer.slice(newline + 1);
-      if (line) yield parseBrokerDelta(line);
+      if (line) yield parseBrokerEvent(line);
       newline = buffer.indexOf("\n");
     }
   }
   buffer += decoder.decode();
   const tail = buffer.trim();
-  if (tail) yield parseBrokerDelta(tail);
+  if (tail) yield parseBrokerEvent(tail);
 }
 
 export async function* coalesceBrokerDeltas(source: AsyncIterable<string>) {
@@ -176,12 +209,35 @@ function nextWithTimeout<T>(next: Promise<IteratorResult<T>>, milliseconds: numb
   });
 }
 
-function parseBrokerDelta(line: string): string {
-  const value = JSON.parse(line) as { delta?: unknown };
-  if (!value || typeof value.delta !== "string") {
+function parseBrokerEvent(line: string): BrokerEvent {
+  const value = JSON.parse(line) as BrokerEvent;
+  if (!value || typeof value !== "object") {
     throw new Error("Inference broker returned an invalid event");
   }
-  return value.delta;
+  if (value.type === "text_delta" && typeof value.delta === "string") return value;
+  if (
+    value.type === "tool_call" &&
+    value.call &&
+    typeof value.call.id === "string" &&
+    typeof value.call.name === "string" &&
+    value.call.arguments &&
+    typeof value.call.arguments === "object"
+  ) return value;
+  if (
+    value.type === "tool_approval" &&
+    value.approval &&
+    typeof value.approval.id === "string" &&
+    typeof value.approval.toolCallId === "string" &&
+    typeof value.approval.toolName === "string" &&
+    typeof value.approval.expiresAt === "string"
+  ) return value;
+  if (
+    value.type === "tool_result" &&
+    value.result &&
+    typeof value.result.callId === "string" &&
+    typeof value.result.name === "string"
+  ) return value;
+  throw new Error("Inference broker returned an invalid event");
 }
 
 export type ToolCallingHarnessOptions = {

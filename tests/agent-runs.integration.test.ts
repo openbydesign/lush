@@ -3,7 +3,12 @@ import { sql } from "kysely";
 import { closeDb, createDb, getDb } from "../packages/db/src/client";
 import { migrateToLatest } from "../packages/db/src/migrate";
 import { createInferenceProvider } from "../services/inference/src/runtime";
-import { executeAgentRun } from "../services/agent/src/run-executor";
+import { decideToolApproval } from "../services/tools/src/gateway";
+import {
+  executeAgentRun,
+  nextBrokerEventOrHeartbeat,
+  scopedToolCallId
+} from "../services/agent/src/run-executor";
 import {
   cancelAgentRun,
   createAgentRun,
@@ -11,7 +16,11 @@ import {
   parseRunConfiguration,
   type AgentRunPrincipal
 } from "../services/agent/src/runs";
-import { createSession, truncateSession } from "../services/sessions/src/runtime";
+import {
+  appendSessionState,
+  createSession,
+  truncateSession
+} from "../services/sessions/src/runtime";
 import { integrationDatabaseUrl } from "./integration-database";
 
 const databaseUrl = integrationDatabaseUrl();
@@ -24,11 +33,14 @@ if (!databaseUrl) {
     let adminDb: ReturnType<typeof createDb>;
     let previousDatabaseUrl: string | undefined;
     let previousSecretKey: string | undefined;
+    let previousToolsPrivateEgress: string | undefined;
 
     beforeAll(async () => {
       previousDatabaseUrl = process.env.DATABASE_URL;
       previousSecretKey = process.env.LUSH_SECRET_KEY;
+      previousToolsPrivateEgress = process.env.LUSH_TOOLS_ALLOW_PRIVATE_EGRESS;
       process.env.LUSH_SECRET_KEY = "durable-run-test-secret";
+      process.env.LUSH_TOOLS_ALLOW_PRIVATE_EGRESS = "true";
       schemaName = `test_${crypto.randomUUID().replace(/-/g, "")}`;
       adminDb = createDb({ databaseUrl });
       await sql`create schema ${sql.ref(schemaName)}`.execute(adminDb);
@@ -45,6 +57,22 @@ if (!databaseUrl) {
       await adminDb.destroy();
       restoreEnv("DATABASE_URL", previousDatabaseUrl);
       restoreEnv("LUSH_SECRET_KEY", previousSecretKey);
+      restoreEnv("LUSH_TOOLS_ALLOW_PRIVATE_EGRESS", previousToolsPrivateEgress);
+    });
+
+    test("the inference broker keeps an approval wait alive with heartbeats", async () => {
+      let resolve!: (result: IteratorResult<string>) => void;
+      const pending = new Promise<IteratorResult<string>>((done) => {
+        resolve = done;
+      });
+      expect(await nextBrokerEventOrHeartbeat(pending, 1)).toEqual({
+        kind: "heartbeat"
+      });
+      resolve({ done: false, value: "approved" });
+      expect(await nextBrokerEventOrHeartbeat(pending, 1)).toEqual({
+        kind: "event",
+        result: { done: false, value: "approved" }
+      });
     });
 
     test("creates one atomic origin message and replays exact idempotent starts", async () => {
@@ -71,6 +99,110 @@ if (!databaseUrl) {
       expect(thread.currentRunId).toBe(first.run.id);
       expect(thread.agentInstallationId).toBeTruthy();
       expect(thread.agentRevisionId).toBe(first.run.agentRevisionId);
+    });
+
+    test("snapshots the session's enabled tools into the run capability", async () => {
+      const { principal, sessionId } = await seedSession();
+      await getDb().updateTable("organizations")
+        .set({ toolGatewayEnabled: true, updatedAt: new Date() })
+        .where("id", "=", principal.organizationId)
+        .execute();
+      const now = new Date();
+      const connection = await getDb().insertInto("toolConnections").values({
+        organizationId: principal.organizationId,
+        ownerUserId: null,
+        source: "openapi",
+        systemKey: null,
+        label: "Web Search",
+        endpointConfig: { url: "https://example.com/openapi.json" },
+        credentialMode: "none",
+        enabled: true,
+        policy: { approval: "never" },
+        catalogVersion: "v1",
+        catalogAcknowledgedVersion: "v1",
+        catalogChanged: false,
+        healthStatus: "healthy",
+        healthCheckedAt: now,
+        healthErrorCode: null,
+        createdAt: now,
+        updatedAt: now
+      }).returning("id").executeTakeFirstOrThrow();
+      const definitions = await getDb().insertInto("toolDefinitions").values([
+        {
+          connectionId: connection.id,
+          externalName: "web.search",
+          qualifiedName: "web.search__web.search",
+          title: "Search the web",
+          description: "Find current information",
+          inputSchema: {
+            type: "object",
+            properties: { query: { type: "string" } },
+            required: ["query"]
+          },
+          outputSchema: null,
+          annotations: {
+            readOnly: true,
+            destructive: false,
+            idempotent: true,
+            openWorld: true
+          },
+          sourceMetadata: {},
+          definitionDigest: "search-digest",
+          enabled: true,
+          timeoutMs: 60_000,
+          createdAt: now,
+          updatedAt: now
+        },
+        {
+          connectionId: connection.id,
+          externalName: "web_fetch",
+          qualifiedName: "web_search__web_fetch",
+          title: "Fetch a page",
+          description: "Fetch one URL",
+          inputSchema: { type: "object" },
+          outputSchema: null,
+          annotations: {
+            readOnly: true,
+            destructive: false,
+            idempotent: true,
+            openWorld: true
+          },
+          sourceMetadata: {},
+          definitionDigest: "fetch-digest",
+          enabled: true,
+          createdAt: now,
+          updatedAt: now
+        }
+      ]).returning(["id", "externalName"]).execute();
+      const disabled = definitions.find((definition) =>
+        definition.externalName === "web_fetch"
+      )!;
+      await appendSessionState(principal, sessionId, {
+        kind: "chat_tool_selection",
+        state: { version: 1, disabledToolDefinitionIds: [disabled.id] }
+      });
+
+      const created = await createAgentRun(
+        principal,
+        sessionId,
+        runRequest("tools", "What happened today?")
+      );
+      const capability = await getDb().selectFrom("agentRunCapabilities")
+        .select("snapshot")
+        .where("runId", "=", created.run.id)
+        .executeTakeFirstOrThrow();
+      expect(capability.snapshot).toMatchObject({
+        tools: [{
+          connectionId: connection.id,
+          connectionLabel: "Web Search",
+          connectionSource: "openapi",
+          connectionIconUrl: "https://example.com/favicon.ico",
+          externalName: "web.search",
+          name: "web_search__web_search",
+          definitionDigest: "search-digest",
+          timeoutMs: 60_000
+        }]
+      });
     });
 
     test("rejects idempotency reuse with a different request", async () => {
@@ -315,7 +447,289 @@ if (!databaseUrl) {
         providerServer.stop(true);
       }
     });
+
+    test("pauses for tool approval, invokes through the gateway, and returns the result to the model", async () => {
+      const requests: Array<Record<string, unknown>> = [];
+      let toolInvocations = 0;
+      const providerServer = Bun.serve({
+        port: 0,
+        hostname: "127.0.0.1",
+        async fetch(request) {
+          const pathname = new URL(request.url).pathname;
+          if (pathname === "/models") {
+            return Response.json({ data: [{ id: "tool-model", name: "Tool Model" }] });
+          }
+          if (pathname === "/air-quality") {
+            toolInvocations += 1;
+            return Response.json({ location: "Sonoma", aqi: 87, cause: "wildfire smoke" });
+          }
+          if (pathname !== "/chat/completions") return new Response(null, { status: 404 });
+          const body = await request.json() as Record<string, unknown>;
+          requests.push(body);
+          if (!Array.isArray(body.tools)) {
+            return sse([{ choices: [{ delta: { content: "Air quality" } }] }]);
+          }
+          const messages = body.messages as Array<{ role?: unknown }>;
+          if (messages.some((message) => message.role === "tool")) {
+            return sse([{ choices: [{ delta: { content: "Air quality checked." } }] }]);
+          }
+          return sse([
+            {
+              choices: [{ delta: { tool_calls: [{
+                index: 0,
+                id: "call-weather",
+                type: "function",
+                function: { name: "builtin__air_quality", arguments: "" }
+              }] } }]
+            },
+            {
+              choices: [{ delta: { tool_calls: [{
+                index: 0,
+                id: "call-weather",
+                function: {
+                  arguments: "{\"query\":{\"location\":\"Sonoma\"}}"
+                }
+              }] } }]
+            }
+          ]);
+        }
+      });
+      try {
+        const { principal, sessionId } = await seedSession();
+        await getDb().updateTable("organizations")
+          .set({ toolGatewayEnabled: true, updatedAt: new Date() })
+          .where("id", "=", principal.organizationId)
+          .execute();
+        const now = new Date();
+        const connection = await getDb().insertInto("toolConnections").values({
+          organizationId: principal.organizationId,
+          ownerUserId: null,
+          source: "openapi",
+          systemKey: null,
+          label: "Built-in",
+          endpointConfig: {
+            url: `http://127.0.0.1:${providerServer.port}/openapi.json`
+          },
+          credentialMode: "none",
+          enabled: true,
+          policy: {},
+          catalogVersion: "v1",
+          catalogAcknowledgedVersion: "v1",
+          catalogChanged: false,
+          healthStatus: "healthy",
+          healthCheckedAt: now,
+          healthErrorCode: null,
+          createdAt: now,
+          updatedAt: now
+        }).returning("id").executeTakeFirstOrThrow();
+        await getDb().insertInto("toolDefinitions").values({
+          connectionId: connection.id,
+          externalName: "air_quality",
+          qualifiedName: "builtin__air_quality",
+          title: "Air quality",
+          description: "Look up current air quality",
+          inputSchema: {
+            type: "object",
+            properties: {
+              query: {
+                type: "object",
+                properties: { location: { type: "string" } },
+                required: ["location"],
+                additionalProperties: false
+              }
+            },
+            additionalProperties: false
+          },
+          outputSchema: null,
+          annotations: {
+            readOnly: true,
+            destructive: false,
+            idempotent: true,
+            openWorld: true
+          },
+          sourceMetadata: {
+            method: "GET",
+            path: "/air-quality",
+            baseUrl: `http://127.0.0.1:${providerServer.port}`
+          },
+          definitionDigest: "air-quality-v1",
+          enabled: true,
+          createdAt: now,
+          updatedAt: now
+        }).execute();
+        const provider = await createInferenceProvider(principal.organizationId, {
+          kind: "openai-compatible",
+          label: "Tool provider",
+          apiKey: "provider-secret",
+          baseUrl: `http://127.0.0.1:${providerServer.port}`
+        });
+        await getDb().updateTable("inferenceProviderModels").set({ enabled: true })
+          .where("providerId", "=", provider.id).execute();
+        const created = await createAgentRun(principal, sessionId, {
+          ...runRequest("tool-execute", "Why is the air bad in Sonoma?"),
+          modelSelection: `${provider.id}:tool-model`
+        });
+        await getDb().updateTable("agentRuns").set({
+          limits: { wallClockMs: 1_000, maxOutputBytes: 8_000_000 }
+        }).where("id", "=", created.run.id).execute();
+
+        const execution = executeAgentRun(created.run.id);
+        const approval = await waitForValue(async () => getDb()
+          .selectFrom("toolApprovals")
+          .select(["id", "status"])
+          .where("runId", "=", created.run.id)
+          .executeTakeFirst());
+        expect(approval.status).toBe("pending");
+        const waitingRun = await waitForValue(async () => {
+          const row = await getDb().selectFrom("agentRuns").select("status")
+            .where("id", "=", created.run.id).executeTakeFirst();
+          return row?.status === "waiting_for_approval" ? row : undefined;
+        });
+        expect(waitingRun.status).toBe("waiting_for_approval");
+        // Approval time does not consume the child environment's active-time
+        // budget. This wait exceeds the run's configured one-second ceiling.
+        await Bun.sleep(1_100);
+        await decideToolApproval(
+          { ...principal, role: "user" },
+          approval.id,
+          true
+        );
+        await execution;
+
+        const run = await getDb().selectFrom("agentRuns").selectAll()
+          .where("id", "=", created.run.id).executeTakeFirstOrThrow();
+        expect(run.status).toBe("completed");
+        expect(run.untrustedContentIngested).toBe(true);
+        const assistant = await getDb().selectFrom("sessionMessages")
+          .select(["content", "metadata"]).where("id", "=", run.assistantMessageId!)
+          .executeTakeFirstOrThrow();
+        const expectedToolCallId = await scopedToolCallId(
+          created.run.id,
+          0,
+          0,
+          "call-weather"
+        );
+        expect(assistant.content).toBe("Air quality checked.");
+        expect(assistant.metadata).toMatchObject({
+          schema: "lush.message.parts.v1",
+          parts: [
+            expect.objectContaining({
+              type: "tool",
+              toolCallId: expectedToolCallId,
+              toolTitle: "Air quality",
+              connectionLabel: "Built-in",
+              connectionSource: "openapi",
+              state: "output-available",
+              approvalDecision: "approved"
+            }),
+            { type: "text", length: "Air quality checked.".length }
+          ]
+        });
+        const events = await listAgentRunEvents(principal, run.id);
+        expect(events.map((event) => event.type)).toContain("tool-input");
+        expect(events.map((event) => event.type)).toContain("tool-approval-required");
+        expect(events.find((event) => event.type === "tool-approval-resolved")?.payload)
+          .toMatchObject({ decision: "approved", approvalId: approval.id });
+        expect(events.map((event) => event.type)).toContain("tool-output");
+        expect(events.find((event) => event.type === "tool-output")?.payload)
+          .toMatchObject({ output: { location: "Sonoma", aqi: 87 } });
+        const toolCall = await getDb().selectFrom("toolCalls")
+          .select(["idempotencyKey", "status"])
+          .where("runId", "=", run.id)
+          .executeTakeFirstOrThrow();
+        expect(toolCall).toMatchObject({ status: "succeeded" });
+        expect(toolCall.idempotencyKey).toHaveLength(64);
+        const toolRequest = requests.find((request) => Array.isArray(request.tools));
+        expect(toolRequest?.tools).toEqual([expect.objectContaining({
+          function: expect.objectContaining({ name: "builtin__air_quality" })
+        })]);
+        const followUp = requests.find((request) =>
+          Array.isArray(request.messages) &&
+          (request.messages as Array<{ role?: unknown }>).some(
+            (message) => message.role === "tool"
+          )
+        );
+        expect(followUp).toBeDefined();
+        expect(toolInvocations).toBe(1);
+
+        const deniedSession = await createSession(principal, {
+          title: "Denied run test",
+          agentId: "lush-chat"
+        });
+        const denied = await createAgentRun(principal, deniedSession.id, {
+          ...runRequest("tool-denied", "Check Sonoma again"),
+          modelSelection: `${provider.id}:tool-model`
+        });
+        const deniedExecution = executeAgentRun(denied.run.id);
+        const deniedApproval = await waitForValue(async () => getDb()
+          .selectFrom("toolApprovals")
+          .select("id")
+          .where("runId", "=", denied.run.id)
+          .where("status", "=", "pending")
+          .executeTakeFirst());
+        await waitForValue(async () => {
+          const row = await getDb().selectFrom("agentRuns").select("status")
+            .where("id", "=", denied.run.id).executeTakeFirst();
+          return row?.status === "waiting_for_approval" ? row : undefined;
+        });
+        await decideToolApproval(
+          { ...principal, role: "user" },
+          deniedApproval.id,
+          false
+        );
+        await deniedExecution;
+        expect(toolInvocations).toBe(1);
+        const deniedEvents = await listAgentRunEvents(principal, denied.run.id);
+        expect(deniedEvents.find(
+          (event) => event.type === "tool-approval-resolved"
+        )?.payload).toMatchObject({ decision: "denied" });
+        expect(deniedEvents.find((event) => event.type === "tool-output")?.payload)
+          .toMatchObject({ errorText: "approval_denied" });
+
+        const cancelledSession = await createSession(principal, {
+          title: "Cancelled approval test",
+          agentId: "lush-chat"
+        });
+        const cancelled = await createAgentRun(principal, cancelledSession.id, {
+          ...runRequest("tool-cancelled", "Check Sonoma once more"),
+          modelSelection: `${provider.id}:tool-model`
+        });
+        const cancelledExecution = executeAgentRun(cancelled.run.id);
+        const cancelledApproval = await waitForValue(async () => getDb()
+          .selectFrom("toolApprovals")
+          .select(["id", "toolCallId"])
+          .where("runId", "=", cancelled.run.id)
+          .where("status", "=", "pending")
+          .executeTakeFirst());
+        await waitForValue(async () => {
+          const row = await getDb().selectFrom("agentRuns").select("status")
+            .where("id", "=", cancelled.run.id).executeTakeFirst();
+          return row?.status === "waiting_for_approval" ? row : undefined;
+        });
+
+        await cancelAgentRun(principal, cancelled.run.id);
+        await cancelledExecution;
+
+        expect(await getDb().selectFrom("toolApprovals").select("status")
+          .where("id", "=", cancelledApproval.id)
+          .executeTakeFirstOrThrow()).toEqual({ status: "expired" });
+        expect(await getDb().selectFrom("toolCalls").select("status")
+          .where("id", "=", cancelledApproval.toolCallId!)
+          .executeTakeFirstOrThrow()).toEqual({ status: "cancelled" });
+        expect(toolInvocations).toBe(1);
+      } finally {
+        providerServer.stop(true);
+      }
+    });
   });
+}
+
+function sse(events: unknown[]) {
+  return new Response([
+    ...events.map((event) => `data: ${JSON.stringify(event)}`),
+    "data: [DONE]",
+    ""
+  ].join("\n"), { headers: { "content-type": "text/event-stream" } });
 }
 
 function runRequest(idempotencyKey: string, content: string) {
@@ -365,4 +779,14 @@ async function seedPrincipal(): Promise<AgentRunPrincipal> {
 function restoreEnv(name: string, value: string | undefined) {
   if (value === undefined) delete process.env[name];
   else process.env[name] = value;
+}
+
+async function waitForValue<T>(read: () => Promise<T | undefined>, timeoutMs = 5_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const value = await read();
+    if (value !== undefined) return value;
+    await Bun.sleep(20);
+  }
+  throw new Error("Timed out waiting for test state");
 }

@@ -4,11 +4,14 @@ import type { AgentRunRow, Database } from "@lush/db/schema";
 import { createLogger } from "@lush/logging/logger";
 import { messageByteSize, titleFromContent } from "@lush/sessions/runtime";
 import { canonicalJson, sha256Hex } from "@lush/tools/digest";
+import { invokeTool } from "@lush/tools/gateway";
+import { isToolGatewayEnabled } from "@lush/tools/runtime";
 import type { Transaction } from "kysely";
 import { textMessage, type Message } from "./harness/content";
 import type { EventLog, ConversationEvent } from "./harness/protocol";
 import { runExec } from "./harness/orchestrator";
 import { InFlightRegistry } from "./harness/event-log";
+import { ActiveExecutionClock } from "./harness/isolation";
 import { SubprocessIsolationProvider } from "./harness/subprocess";
 import {
   AgentRunError,
@@ -16,14 +19,17 @@ import {
   isTerminalRunStatus,
   parseRunConfiguration,
   registerLocalRun,
+  type AgentRunCapabilitiesV1,
   type AgentRunConfigurationV1
 } from "./runs";
-import { streamLushAgentChat } from "./runtime";
+import { streamLushAgentChat, streamLushAgentTurn } from "./runtime";
 
 const logger = createLogger("@lush/agent-runs");
 const leaseMs = 150_000;
 const leaseRenewMs = 30_000;
 const authorizationPollMs = 250;
+const brokerHeartbeatMs = 5_000;
+export const agentToolExecutionTimeoutMs = 35_000;
 const executions = new Map<string, Promise<void>>();
 const inFlight = new InFlightRegistry();
 type LocalBroker = { port: number; stop(closeActiveConnections?: boolean): void };
@@ -54,7 +60,7 @@ export async function recoverAgentRuns(): Promise<number> {
     .where((eb) => eb.or([
       eb("status", "=", "queued"),
       eb.and([
-        eb("status", "=", "running"),
+        eb("status", "in", ["running", "waiting_for_approval"]),
         eb.or([
           eb("leaseExpiresAt", "is", null),
           eb("leaseExpiresAt", "<", now)
@@ -91,8 +97,10 @@ export async function executeAgentRun(runId: string): Promise<void> {
   let environment: Awaited<ReturnType<SubprocessIsolationProvider["provision"]>> | undefined;
   let broker: LocalBroker | undefined;
   let assistantText = "";
+  const activeExecutionClock = new ActiveExecutionClock();
 
   try {
+    const capabilities = await loadRunCapabilities(claimed);
     if (claimed.recovery === "completed") {
       assistantText = await completedConversationText(claimed.run.id);
       await completeRun(claimed, assistantText);
@@ -109,8 +117,15 @@ export async function executeAgentRun(runId: string): Promise<void> {
       return;
     }
     const capabilityToken = `${crypto.randomUUID()}${crypto.randomUUID()}`;
-    broker = startInferenceBroker(claimed, configuration, capabilityToken, controller.signal);
-    provider = new SubprocessIsolationProvider();
+    broker = startInferenceBroker(
+      claimed,
+      configuration,
+      capabilities,
+      capabilityToken,
+      controller.signal,
+      activeExecutionClock
+    );
+    provider = new SubprocessIsolationProvider({ activeExecutionClock });
     environment = await provider.provision({
       profile: "chat",
       organizationId: claimed.run.organizationId,
@@ -165,6 +180,34 @@ export async function executeAgentRun(runId: string): Promise<void> {
               firstTokenMs: Date.now() - new Date(claimed.run.createdAt).getTime()
             }, "agent run first token");
           }
+        } else if (message.content.type === "tool_call") {
+          const presentation = toolPresentation(capabilities, message.content.name);
+          await appendPublicEvent(claimed, "tool-input", {
+            toolCallId: message.content.id,
+            toolName: message.content.name,
+            input: message.content.arguments,
+            ...presentation
+          });
+        } else if (message.content.type === "confirmation") {
+          const presentation = toolPresentation(capabilities, message.content.toolName);
+          await appendPublicEvent(claimed, "tool-approval-required", {
+            approvalId: message.content.id,
+            toolCallId: message.content.toolCallId,
+            toolName: message.content.toolName,
+            expiresAt: message.content.expiresAt,
+            ...presentation
+          });
+          await markRunWaitingForApproval(claimed, message.content.id);
+        } else if (message.content.type === "tool_result") {
+          const presentation = toolPresentation(capabilities, message.content.name);
+          await appendPublicEvent(claimed, "tool-output", {
+            toolCallId: message.content.callId,
+            toolName: message.content.name,
+            ...presentation,
+            ...(message.content.isError
+              ? { errorText: toolErrorText(message.content.response) }
+              : { output: message.content.response })
+          });
         }
       }
     }
@@ -194,6 +237,21 @@ export async function executeAgentRun(runId: string): Promise<void> {
     broker?.stop(true);
     await environment?.destroy().catch(() => {});
   }
+}
+
+function toolPresentation(
+  capabilities: AgentRunCapabilitiesV1,
+  toolName: string
+) {
+  const tool = capabilities.tools.find((candidate) => candidate.name === toolName);
+  return tool
+    ? {
+        toolTitle: tool.title,
+        connectionLabel: tool.connectionLabel,
+        connectionSource: tool.connectionSource,
+        ...(tool.connectionIconUrl ? { connectionIconUrl: tool.connectionIconUrl } : {})
+      }
+    : {};
 }
 
 class PostgresRunEventLog implements EventLog {
@@ -228,10 +286,13 @@ async function claimRun(runId: string): Promise<ClaimedRun | null> {
       .where("id", "=", runId).forUpdate().executeTakeFirst();
     if (!run || isTerminalRunStatus(run.status)) return null;
     const now = new Date();
-    const recovering = run.status === "running";
+    const recovering = run.status === "running" || run.status === "waiting_for_approval";
     if (
       run.status !== "queued" &&
-      !(run.status === "running" && (!run.leaseExpiresAt || new Date(run.leaseExpiresAt) < now))
+      !(
+        (run.status === "running" || run.status === "waiting_for_approval") &&
+        (!run.leaseExpiresAt || new Date(run.leaseExpiresAt) < now)
+      )
     ) {
       return null;
     }
@@ -311,8 +372,10 @@ async function completedConversationText(runId: string) {
 function startInferenceBroker(
   claimed: ClaimedRun,
   expectedConfiguration: AgentRunConfigurationV1,
+  capabilities: AgentRunCapabilitiesV1,
   capabilityToken: string,
-  executionSignal: AbortSignal
+  executionSignal: AbortSignal,
+  activeExecutionClock: ActiveExecutionClock
 ): LocalBroker {
   return Bun.serve({
     port: 0,
@@ -349,24 +412,40 @@ function startInferenceBroker(
         revoked,
         signal
       );
-      const generator = streamLushAgentChat({
-        organizationId: claimed.run.organizationId,
-        instructions: configuration.agent.instructions,
-        modelSelection: configuration.modelSelection,
-        messages: configuration.messages,
-        project: configuration.project,
-        signal
-      });
+      const generator = streamRunToolLoop(
+        claimed,
+        configuration,
+        capabilities,
+        signal,
+        activeExecutionClock
+      );
       const encoder = new TextEncoder();
       return new Response(new ReadableStream({
         async start(controller) {
           try {
-            for await (const delta of generator) {
-              controller.enqueue(encoder.encode(`${JSON.stringify({ delta })}\n`));
+            const iterator = generator[Symbol.asyncIterator]();
+            let pending = iterator.next();
+            while (true) {
+              const next = await nextBrokerEventOrHeartbeat(pending, brokerHeartbeatMs);
+              if (next.kind === "heartbeat") {
+                controller.enqueue(encoder.encode("\n"));
+                continue;
+              }
+              if (next.result.done) break;
+              controller.enqueue(encoder.encode(`${JSON.stringify(next.result.value)}\n`));
+              pending = iterator.next();
             }
             controller.close();
           } catch (error) {
-            controller.error(error);
+            if (!signal.aborted) {
+              controller.error(error);
+            } else {
+              // A cancelled run intentionally tears down the broker stream.
+              // Do not surface that expected abort as an unhandled stream error.
+              try {
+                controller.close();
+              } catch {}
+            }
           } finally {
             stopAuthorizationMonitor();
           }
@@ -385,6 +464,375 @@ function startInferenceBroker(
   }) as unknown as LocalBroker;
 }
 
+export function nextBrokerEventOrHeartbeat<T>(
+  pending: Promise<IteratorResult<T>>,
+  heartbeatMs: number
+): Promise<
+  | { kind: "event"; result: IteratorResult<T> }
+  | { kind: "heartbeat" }
+> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => resolve({ kind: "heartbeat" }), heartbeatMs);
+    pending.then(
+      (result) => {
+        clearTimeout(timer);
+        resolve({ kind: "event", result });
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      }
+    );
+  });
+}
+
+async function* streamRunToolLoop(
+  claimed: ClaimedRun,
+  configuration: AgentRunConfigurationV1,
+  capabilities: AgentRunCapabilitiesV1,
+  signal: AbortSignal,
+  activeExecutionClock: ActiveExecutionClock
+) {
+  const messages: Parameters<typeof streamLushAgentTurn>[0]["messages"] = [
+    ...configuration.messages
+  ];
+  const toolByName = new Map(capabilities.tools.map((tool) => [tool.name, tool]));
+  const tools = capabilities.tools.map((tool) => ({
+    name: tool.name,
+    description: tool.description || tool.title,
+    inputSchema: tool.inputSchema
+  }));
+
+  for (let turn = 0; turn < 8; turn += 1) {
+    let text = "";
+    const calls: Array<{
+      id: string;
+      name: string;
+      arguments: Record<string, unknown>;
+    }> = [];
+    for await (const event of streamLushAgentTurn({
+      organizationId: claimed.run.organizationId,
+      instructions: configuration.agent.instructions,
+      modelSelection: configuration.modelSelection,
+      messages,
+      tools,
+      project: configuration.project,
+      signal
+    })) {
+      if (event.type === "text_delta") text += event.delta;
+      else {
+        const call = {
+          ...event.call,
+          id: await scopedToolCallId(
+            claimed.run.id,
+            turn,
+            calls.length,
+            event.call.id
+          )
+        };
+        calls.push(call);
+        yield { type: "tool_call" as const, call };
+        continue;
+      }
+      yield event;
+    }
+    if (text) messages.push({ role: "assistant", content: text });
+    if (calls.length === 0) return;
+    messages.push({ role: "assistant", toolCalls: calls });
+
+    for (const call of calls) {
+      const binding = toolByName.get(call.name);
+      let attempt: RunToolAttempt = binding
+        ? await executeRunTool(claimed, binding, call, signal)
+        : { kind: "result", result: {
+            callId: call.id,
+            name: call.name,
+            response: { error: "tool_not_authorized" },
+            isError: true
+          } };
+      if (attempt.kind === "approval") {
+        yield {
+          type: "tool_approval" as const,
+          approval: {
+            id: attempt.approvalId,
+            toolCallId: call.id,
+            toolName: call.name,
+            expiresAt: attempt.expiresAt,
+            question: `Allow ${call.name} to run?`
+          }
+        };
+        const resumeExecutionClock = activeExecutionClock.pause();
+        let decision: "approved" | "denied" | "expired";
+        try {
+          decision = await waitForToolApproval(
+            claimed,
+            attempt.approvalId,
+            attempt.expiresAt,
+            signal
+          );
+        } finally {
+          resumeExecutionClock();
+        }
+        await markRunApprovalResolved(claimed, call, attempt.approvalId, decision);
+        attempt = decision === "approved"
+          ? await executeRunTool(claimed, binding!, call, signal)
+          : { kind: "result", result: {
+              callId: call.id,
+              name: call.name,
+              response: { error: decision === "denied" ? "approval_denied" : "approval_expired" },
+              isError: true
+            } };
+        if (attempt.kind === "approval") {
+          throw new Error("Approved tool call unexpectedly requested approval again");
+        }
+      }
+      const result = attempt.result;
+      yield { type: "tool_result" as const, result };
+      messages.push({
+        role: "tool",
+        toolCallId: result.callId,
+        name: result.name,
+        content: JSON.stringify(result.response),
+        isError: result.isError
+      });
+    }
+  }
+  throw new Error("Agent exceeded the maximum of 8 model/tool turns");
+}
+
+export async function scopedToolCallId(
+  runId: string,
+  turn: number,
+  ordinal: number,
+  providerCallId: string
+) {
+  // Recovery cannot safely re-infer a parked tool turn: providers may return a
+  // different id or call order, producing a different gateway idempotency key.
+  // Durable parking must replay persisted calls from a checkpoint instead.
+  const digest = await sha256Hex(canonicalJson({
+    runId,
+    turn,
+    ordinal,
+    providerCallId
+  }));
+  return `call_${digest.slice(0, 32)}`;
+}
+
+type RunToolResult = {
+  callId: string;
+  name: string;
+  response: unknown;
+  isError: boolean;
+};
+
+type RunToolAttempt =
+  | { kind: "result"; result: RunToolResult }
+  | { kind: "approval"; approvalId: string; expiresAt: string };
+
+async function executeRunTool(
+  claimed: ClaimedRun,
+  binding: AgentRunCapabilitiesV1["tools"][number],
+  call: { id: string; name: string; arguments: Record<string, unknown> },
+  signal: AbortSignal
+): Promise<RunToolAttempt> {
+  try {
+    return await withToolExecutionTimeout(
+      (attemptSignal) => executeRunToolAttempt(
+        claimed,
+        binding,
+        call,
+        attemptSignal
+      ),
+      signal,
+      binding.timeoutMs ?? agentToolExecutionTimeoutMs
+    );
+  } catch (error) {
+    if (signal.aborted) {
+      throw abortReason(signal, "Run was cancelled");
+    }
+    const timedOut = error instanceof AgentToolTimeoutError;
+    logger.warn({
+      err: error,
+      runId: claimed.run.id,
+      toolName: call.name
+    }, timedOut ? "agent tool invocation timed out" : "agent tool invocation failed");
+    return { kind: "result", result: {
+      callId: call.id,
+      name: call.name,
+      response: timedOut
+        ? {
+            error: "tool_timeout",
+            message: error.message
+          }
+        : {
+            error: error instanceof Error ? error.message : "tool_invocation_failed"
+          },
+      isError: true
+    } };
+  }
+}
+
+async function executeRunToolAttempt(
+  claimed: ClaimedRun,
+  binding: AgentRunCapabilitiesV1["tools"][number],
+  call: { id: string; name: string; arguments: Record<string, unknown> },
+  signal: AbortSignal
+): Promise<RunToolAttempt> {
+  if (!(await isToolGatewayEnabled(claimed.run.organizationId))) {
+    return { kind: "result", result: {
+      callId: call.id,
+      name: call.name,
+      response: { error: "tool_gateway_disabled" },
+      isError: true
+    } };
+  }
+  const membership = await getDb().selectFrom("organizationMemberships")
+    .select("role")
+    .where("organizationId", "=", claimed.run.organizationId)
+    .where("userId", "=", claimed.run.initiatedByUserId)
+    .executeTakeFirst();
+  if (!membership) {
+    throw new Error("Run principal is no longer active");
+  }
+  const outcome = await invokeTool({
+    organizationId: claimed.run.organizationId,
+    userId: claimed.run.initiatedByUserId,
+    role: membership.role
+  }, {
+    connectionId: binding.connectionId,
+    toolName: binding.externalName,
+    input: call.arguments,
+    expectedDefinitionDigest: binding.definitionDigest,
+    idempotencyKey: await sha256Hex(canonicalJson({
+      runId: claimed.run.id,
+      callId: call.id
+    })),
+    runId: claimed.run.id
+  }, { signal });
+  if ("result" in outcome) {
+    if (outcome.status === "failed" || outcome.result.isError) {
+      logger.warn({
+        runId: claimed.run.id,
+        toolName: call.name,
+        status: outcome.status
+      }, "agent tool invocation returned an error");
+    }
+    if (binding.annotations.openWorld) {
+      await getDb().updateTable("agentRuns")
+        .set({ untrustedContentIngested: true, updatedAt: new Date() })
+        .where("id", "=", claimed.run.id)
+        .execute();
+    }
+    return { kind: "result", result: {
+      callId: call.id,
+      name: call.name,
+      response: outcome.result.structured ?? { content: outcome.result.content },
+      isError: outcome.status === "failed" || outcome.result.isError
+    } };
+  }
+  if (outcome.status === "approval_required") {
+    logger.info({
+      runId: claimed.run.id,
+      toolName: call.name
+    }, "agent tool invocation requires approval");
+    return {
+      kind: "approval",
+      approvalId: outcome.approval.approvalId,
+      expiresAt: outcome.approval.expiresAt
+    };
+  }
+  logger.warn({
+    runId: claimed.run.id,
+    toolName: call.name,
+    status: outcome.status,
+    reason: outcome.reason
+  }, "agent tool invocation was rejected");
+  return { kind: "result", result: {
+    callId: call.id,
+    name: call.name,
+    response: { error: outcome.reason },
+    isError: true
+  } };
+}
+
+export class AgentToolTimeoutError extends Error {
+  readonly code = "tool_timeout";
+
+  constructor(readonly timeoutMs: number) {
+    super(`Tool execution exceeded ${Math.ceil(timeoutMs / 1_000)} seconds`);
+    this.name = "AgentToolTimeoutError";
+  }
+}
+
+export async function withToolExecutionTimeout<T>(
+  operation: (signal: AbortSignal) => Promise<T>,
+  parentSignal: AbortSignal,
+  timeoutMs = agentToolExecutionTimeoutMs
+): Promise<T> {
+  if (parentSignal.aborted) {
+    throw abortReason(parentSignal, "Run was cancelled");
+  }
+  const timeoutController = new AbortController();
+  const attemptSignal = AbortSignal.any([parentSignal, timeoutController.signal]);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let onParentAbort: (() => void) | undefined;
+  const interrupted = new Promise<never>((_resolve, reject) => {
+    onParentAbort = () => reject(abortReason(parentSignal, "Run was cancelled"));
+    parentSignal.addEventListener("abort", onParentAbort, { once: true });
+    if (parentSignal.aborted) {
+      onParentAbort();
+      return;
+    }
+    timer = setTimeout(() => {
+      const error = new AgentToolTimeoutError(timeoutMs);
+      timeoutController.abort(error);
+      reject(error);
+    }, timeoutMs);
+  });
+  try {
+    return await Promise.race([operation(attemptSignal), interrupted]);
+  } finally {
+    if (timer) clearTimeout(timer);
+    if (onParentAbort) parentSignal.removeEventListener("abort", onParentAbort);
+  }
+}
+
+function abortReason(signal: AbortSignal, fallback: string) {
+  return signal.reason instanceof Error ? signal.reason : new Error(fallback);
+}
+
+async function loadRunCapabilities(claimed: ClaimedRun): Promise<AgentRunCapabilitiesV1> {
+  const row = await getDb().selectFrom("agentRunCapabilities")
+    .select(["snapshot", "digest", "revokedAt"])
+    .where("runId", "=", claimed.run.id)
+    .executeTakeFirst();
+  if (
+    !row ||
+    row.revokedAt ||
+    row.digest !== claimed.run.capabilityDigest ||
+    await sha256Hex(canonicalJson(row.snapshot)) !== claimed.run.capabilityDigest
+  ) {
+    throw new Error("Run capability is unavailable");
+  }
+  return row.snapshot as AgentRunCapabilitiesV1;
+}
+
+function toolErrorText(response: unknown) {
+  if (
+    response &&
+    typeof response === "object" &&
+    "message" in response &&
+    typeof response.message === "string"
+  ) return response.message;
+  if (
+    response &&
+    typeof response === "object" &&
+    "error" in response &&
+    typeof response.error === "string"
+  ) return response.error;
+  return "Tool invocation failed";
+}
+
 function constantTimeEqual(actual: string, expected: string) {
   const actualBytes = Buffer.from(actual);
   const expectedBytes = Buffer.from(expected);
@@ -400,7 +848,7 @@ async function isInferenceAuthorized(claimed: ClaimedRun) {
       .onRef("organizationMemberships.userId", "=", "agentRuns.initiatedByUserId"))
     .select("agentRuns.id")
     .where("agentRuns.id", "=", claimed.run.id)
-    .where("agentRuns.status", "=", "running")
+    .where("agentRuns.status", "in", ["running", "waiting_for_approval"])
     .where("agentRuns.leaseOwner", "=", claimed.leaseOwner)
     .where("agentRunCapabilities.revokedAt", "is", null)
     .executeTakeFirst();
@@ -459,6 +907,106 @@ async function markEnvironmentRunning(claimed: ClaimedRun, backendHandle: string
 
 async function appendPublicEvent(claimed: ClaimedRun, type: string, payload: unknown) {
   return appendClaimedEvent(claimed, type, payload);
+}
+
+async function markRunWaitingForApproval(claimed: ClaimedRun, approvalId: string) {
+  const sequence = claimed.nextSequence;
+  const appended = await getDb().transaction().execute(async (trx) => {
+    const run = await requireLeaseForUpdate(trx, claimed);
+    if (run.status === "waiting_for_approval") return sequence - 1;
+    const now = new Date();
+    const updated = await trx.updateTable("agentRuns").set({
+      status: "waiting_for_approval",
+      updatedAt: now
+    }).where("id", "=", run.id).returningAll().executeTakeFirstOrThrow();
+    return appendRunEvent(trx, updated, "run-status", {
+      status: "waiting_for_approval",
+      approvalId
+    }, now, undefined, sequence);
+  });
+  claimed.nextSequence = appended + 1;
+}
+
+async function waitForToolApproval(
+  claimed: ClaimedRun,
+  approvalId: string,
+  expiresAt: string,
+  signal: AbortSignal
+): Promise<"approved" | "denied" | "expired"> {
+  const deadline = new Date(expiresAt).getTime();
+  while (!signal.aborted) {
+    const [run, approval] = await Promise.all([
+      getDb().selectFrom("agentRuns").select("status")
+        .where("id", "=", claimed.run.id).executeTakeFirst(),
+      getDb().selectFrom("toolApprovals").select(["status", "toolCallId"])
+        .where("id", "=", approvalId)
+        .where("runId", "=", claimed.run.id)
+        .where("initiatedByUserId", "=", claimed.run.initiatedByUserId)
+        .executeTakeFirst()
+    ]);
+    if (!approval) throw new Error("Tool approval is unavailable");
+    if (run?.status === "waiting_for_approval") {
+      if (approval.status === "approved" || approval.status === "denied") {
+        return approval.status;
+      }
+      if (approval.status === "expired") return "expired";
+      if (Date.now() >= deadline) {
+        const expired = await expirePendingToolApproval(approvalId, approval.toolCallId);
+        if (expired) return "expired";
+      }
+    }
+    await abortableDelay(signal, authorizationPollMs);
+  }
+  throw signal.reason instanceof Error ? signal.reason : new Error("Run was cancelled");
+}
+
+async function expirePendingToolApproval(approvalId: string, toolCallId: string | null) {
+  return getDb().transaction().execute(async (trx) => {
+    const now = new Date();
+    const approval = await trx.updateTable("toolApprovals").set({
+      status: "expired",
+      decidedAt: now
+    }).where("id", "=", approvalId)
+      .where("status", "=", "pending")
+      .returning("id").executeTakeFirst();
+    if (!approval) return false;
+    if (toolCallId) {
+      await trx.updateTable("toolCalls").set({
+        status: "cancelled",
+        completedAt: now
+      }).where("id", "=", toolCallId)
+        .where("status", "=", "waiting_for_approval").execute();
+    }
+    return true;
+  });
+}
+
+async function markRunApprovalResolved(
+  claimed: ClaimedRun,
+  call: { id: string; name: string },
+  approvalId: string,
+  decision: "approved" | "denied" | "expired"
+) {
+  const sequence = claimed.nextSequence;
+  const last = await getDb().transaction().execute(async (trx) => {
+    const run = await requireLeaseForUpdate(trx, claimed);
+    const now = new Date();
+    const updated = await trx.updateTable("agentRuns").set({
+      status: "running",
+      updatedAt: now
+    }).where("id", "=", run.id).returningAll().executeTakeFirstOrThrow();
+    const resolved = await appendRunEvent(trx, updated, "tool-approval-resolved", {
+      approvalId,
+      toolCallId: call.id,
+      toolName: call.name,
+      decision
+    }, now, undefined, sequence);
+    return appendRunEvent(trx, updated, "run-status", {
+      status: "running",
+      approvalId
+    }, now, claimed.leaseOwner, resolved + 1);
+  });
+  claimed.nextSequence = last + 1;
 }
 
 async function appendClaimedEvent(
@@ -562,11 +1110,7 @@ async function insertAssistantMessage(
   content: string,
   now: Date
 ) {
-  const metadata = {
-    schema: "lush.message.parts.v1",
-    runId: run.id,
-    parts: [{ type: "text", length: content.length }]
-  };
+  const metadata = await runMessageMetadata(trx, run.id, content);
   const byteSize = messageByteSize(content, metadata);
   const thread = await trx.selectFrom("sessionThreads").selectAll()
     .where("id", "=", run.sessionId).forUpdate().executeTakeFirstOrThrow();
@@ -587,6 +1131,150 @@ async function insertAssistantMessage(
     updatedAt: now
   }).where("id", "=", thread.id).execute();
   return message;
+}
+
+async function runMessageMetadata(
+  trx: Transaction<Database>,
+  runId: string,
+  content: string
+) {
+  const rows = await trx.selectFrom("agentRunEvents")
+    .select(["type", "payload"])
+    .where("runId", "=", runId)
+    .where("type", "in", [
+      "response-reset",
+      "text-delta",
+      "tool-input",
+      "tool-output",
+      "tool-approval-required",
+      "tool-approval-resolved"
+    ])
+    .orderBy("sequence", "asc")
+    .execute();
+  const parts: Array<Record<string, unknown>> = [];
+  for (const row of rows) {
+    const payload = recordValue(row.payload);
+    if (row.type === "response-reset") {
+      parts.length = 0;
+      continue;
+    }
+    if (row.type === "text-delta" && typeof payload.delta === "string") {
+      const prior = parts[parts.length - 1];
+      if (prior?.type === "text" && typeof prior.length === "number") {
+        prior.length += payload.delta.length;
+      } else {
+        parts.push({ type: "text", length: payload.delta.length });
+      }
+      continue;
+    }
+    if (
+      row.type === "tool-input" &&
+      typeof payload.toolCallId === "string" &&
+      typeof payload.toolName === "string"
+    ) {
+      parts.push({
+        type: "tool",
+        toolCallId: payload.toolCallId,
+        toolName: payload.toolName,
+        ...toolPresentationFromPayload(payload),
+        state: "input-available",
+        input: payload.input
+      });
+      continue;
+    }
+    const toolCallId = typeof payload.toolCallId === "string"
+      ? payload.toolCallId
+      : undefined;
+    const index = toolCallId ? lastToolMetadataIndex(parts, toolCallId) : -1;
+    if (index < 0) continue;
+    const tool = parts[index]!;
+    if (
+      row.type === "tool-approval-required" &&
+      typeof payload.approvalId === "string" &&
+      typeof payload.expiresAt === "string"
+    ) {
+      Object.assign(tool, {
+        state: "approval-requested",
+        approvalId: payload.approvalId,
+        approvalExpiresAt: payload.expiresAt
+      });
+    } else if (
+      row.type === "tool-approval-resolved" &&
+      (payload.decision === "approved" ||
+        payload.decision === "denied" ||
+        payload.decision === "expired")
+    ) {
+      Object.assign(tool, {
+        state: payload.decision === "approved"
+          ? "approval-responded"
+          : payload.decision === "denied"
+            ? "output-denied"
+            : "output-error",
+        approvalDecision: payload.decision
+      });
+    } else if (row.type === "tool-output") {
+      const errorText = typeof payload.errorText === "string" ? payload.errorText : undefined;
+      Object.assign(tool, {
+        state: errorText === "approval_denied"
+          ? "output-denied"
+          : errorText
+            ? "output-error"
+            : "output-available",
+        output: payload.output,
+        errorText
+      });
+    }
+  }
+  const textLength = parts.reduce(
+    (total, part) => total + (part.type === "text" && typeof part.length === "number"
+      ? part.length
+      : 0),
+    0
+  );
+  if (textLength !== content.length) {
+    return {
+      schema: "lush.message.parts.v1",
+      runId,
+      parts: [{ type: "text", length: content.length }]
+    };
+  }
+  return { schema: "lush.message.parts.v1", runId, parts };
+}
+
+function recordValue(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function lastToolMetadataIndex(
+  parts: Array<Record<string, unknown>>,
+  toolCallId: string
+) {
+  for (let index = parts.length - 1; index >= 0; index -= 1) {
+    const part = parts[index];
+    if (part?.type === "tool" && part.toolCallId === toolCallId) return index;
+  }
+  return -1;
+}
+
+function toolPresentationFromPayload(payload: Record<string, unknown>) {
+  return {
+    ...(typeof payload.toolTitle === "string"
+      ? { toolTitle: payload.toolTitle }
+      : {}),
+    ...(typeof payload.connectionLabel === "string"
+      ? { connectionLabel: payload.connectionLabel }
+      : {}),
+    ...(payload.connectionSource === "mcp" ||
+      payload.connectionSource === "openapi" ||
+      payload.connectionSource === "native"
+      ? { connectionSource: payload.connectionSource }
+      : {}),
+    ...(typeof payload.connectionIconUrl === "string"
+      ? { connectionIconUrl: payload.connectionIconUrl }
+      : {})
+  };
 }
 
 async function closeEnvironmentAndSession(
@@ -632,7 +1320,7 @@ async function transitionRunFailed(
 async function requireLeaseForUpdate(trx: Transaction<Database>, claimed: ClaimedRun) {
   const run = await trx.selectFrom("agentRuns").selectAll()
     .where("id", "=", claimed.run.id)
-    .where("status", "=", "running")
+    .where("status", "in", ["running", "waiting_for_approval"])
     .where("leaseOwner", "=", claimed.leaseOwner)
     .forUpdate().executeTakeFirst();
   if (!run) throw new AgentRunError("run_lease_lost", "Run execution lease was lost", 409);
@@ -656,7 +1344,7 @@ async function renewLease(claimed: ClaimedRun) {
       leaseExpiresAt: expiresAt,
       updatedAt: new Date()
     }).where("id", "=", claimed.run.id)
-      .where("status", "=", "running")
+      .where("status", "in", ["running", "waiting_for_approval"])
       .where("leaseOwner", "=", claimed.leaseOwner)
       .executeTakeFirst();
     if (Number(result.numUpdatedRows) === 0) return false;

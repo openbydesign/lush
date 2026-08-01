@@ -293,6 +293,7 @@ function ChatRoute() {
       defaultModelSelection={app.modelDefaults.chat}
       providers={app.enabledInferenceProviders}
       currentRole={app.membershipRole}
+      runApiRequest={app.runApiRequest}
       session={app.activeChatSession}
       sessionKey={app.chatSessionKey}
       ensureSession={app.ensureSession}
@@ -300,6 +301,7 @@ function ChatRoute() {
       onTruncateSession={app.truncateChatSession}
       onMessageFeedback={app.recordChatMessageFeedback}
       onModelSelectionChange={app.recordChatModelSelection}
+      onToolSelectionChange={app.recordChatToolSelection}
     />
   );
 }

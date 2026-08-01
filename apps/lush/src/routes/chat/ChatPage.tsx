@@ -3,11 +3,13 @@ import { useLocation, useNavigate } from "react-router-dom";
 import {
   ApiError,
   cancelAgentRun,
+  decideToolApproval,
   type InferenceProviderStatus,
   type Session,
   type UserRole,
 } from "@lush/api-client";
 import { EmptyChatState } from "../../components/chat/EmptyChatState";
+import { SessionToolsMenu } from "../../components/chat/SessionToolsMenu";
 import {
   Attachment,
   AttachmentInfo,
@@ -37,6 +39,7 @@ import {
   usePromptInputAttachments
 } from "../../components/ai-elements/prompt-input";
 import { Settings2Icon, XIcon } from "lucide-react";
+import { DropdownMenuSeparator } from "../../components/ui/dropdown-menu";
 import {
   createId,
   getFirstName,
@@ -45,11 +48,13 @@ import {
 } from "../../lib/app-data";
 import {
   appendAgentStreamEvent,
+  agentStreamEventFromRunEvent,
   agentChatMessage,
   chatMessageFromSession,
   chatMessageMetadata,
   chatMessageRequestText,
   chatMessageText,
+  finalizePendingToolParts,
   promptAttachments,
   readAgentRunEventStream
 } from "../../lib/agent-message";
@@ -72,6 +77,7 @@ import {
   modelSelectionName,
   resolveChatModelSelection
 } from "../../lib/chat-model-selection";
+import { chatToolSelectionFromSession } from "../../lib/chat-tool-selection";
 
 function getGreeting(date: Date) {
   const hour = date.getHours();
@@ -93,6 +99,9 @@ export function ChatPage(props: {
   defaultModelSelection: string;
   providers: InferenceProviderStatus[];
   currentRole?: UserRole;
+  runApiRequest: <T>(
+    operation: (sessionToken: string) => Promise<T>
+  ) => Promise<T>;
   session?: Session;
   sessionKey: number;
   ensureSession: (force?: boolean) => Promise<string | undefined>;
@@ -113,6 +122,10 @@ export function ChatPage(props: {
     sessionId: string,
     modelSelection: string
   ) => Promise<void>;
+  onToolSelectionChange: (
+    sessionId: string,
+    disabledToolDefinitionIds: string[]
+  ) => Promise<void>;
 }) {
   const navigate = useNavigate();
   const location = useLocation();
@@ -124,12 +137,15 @@ export function ChatPage(props: {
   const syncedSessionKeyRef = useRef<number | undefined>(undefined);
   const modelSelectionSaveQueueRef = useRef<Promise<void>>(Promise.resolve());
   const modelSelectionRevisionRef = useRef(0);
+  const toolSelectionSaveQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const toolSelectionRevisionRef = useRef(0);
   const projectPromptHandledRef = useRef<string | undefined>(undefined);
 
   const [now, setNow] = useState(new Date());
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
+  const [isStopping, setIsStopping] = useState(false);
   const [isRewriting, setIsRewriting] = useState(false);
   const [error, setError] = useState("");
   const initialSessionModelSelection = chatModelSelectionFromSession(
@@ -142,6 +158,14 @@ export function ChatPage(props: {
     Boolean(initialSessionModelSelection)
   );
   const [modelSelectionSaveError, setModelSelectionSaveError] = useState("");
+  const initialToolSelection = chatToolSelectionFromSession(props.session);
+  const [disabledToolDefinitionIds, setDisabledToolDefinitionIds] = useState(
+    initialToolSelection ?? []
+  );
+  const [hasThreadToolSelection, setHasThreadToolSelection] = useState(
+    Boolean(initialToolSelection)
+  );
+  const [toolSelectionSaveError, setToolSelectionSaveError] = useState("");
   const [activeSessionId, setActiveSessionId] = useState<string>();
   const [composerHeight, setComposerHeight] = useState(0);
   const [scrollerResetKey, setScrollerResetKey] = useState(
@@ -187,7 +211,7 @@ export function ChatPage(props: {
   useEffect(() => {
     const session = props.session;
     const sessionKey = props.sessionKey;
-    if (isStreaming || sessionKey === syncedSessionKeyRef.current) {
+    if (isStreaming || isStopping || sessionKey === syncedSessionKeyRef.current) {
       return;
     }
 
@@ -209,9 +233,14 @@ export function ChatPage(props: {
     setHasThreadModelSelection(Boolean(restoredModelSelection));
     modelSelectionRevisionRef.current += 1;
     setModelSelectionSaveError("");
+    const restoredToolSelection = chatToolSelectionFromSession(session);
+    setDisabledToolDefinitionIds(restoredToolSelection ?? []);
+    setHasThreadToolSelection(Boolean(restoredToolSelection));
+    toolSelectionRevisionRef.current += 1;
+    setToolSelectionSaveError("");
     setPendingEdit(undefined);
     setError("");
-  }, [props.session, props.sessionKey, isStreaming, activeSessionId]);
+  }, [props.session, props.sessionKey, isStreaming, isStopping, activeSessionId]);
 
   useEffect(() => {
     const clockInterval = window.setInterval(() => setNow(new Date()), 60_000);
@@ -285,6 +314,39 @@ export function ChatPage(props: {
     );
   };
 
+  const persistToolSelection = (
+    sessionId: string,
+    disabledIds: string[]
+  ) => {
+    const save = toolSelectionSaveQueueRef.current
+      .catch(() => undefined)
+      .then(() => props.onToolSelectionChange(sessionId, disabledIds));
+    toolSelectionSaveQueueRef.current = save;
+    return save;
+  };
+
+  const reportToolSelectionSaveError = (
+    caught: unknown,
+    revision: number
+  ) => {
+    if (revision !== toolSelectionRevisionRef.current) return;
+    const message =
+      caught instanceof Error ? caught.message : "Unable to save tool selection";
+    setToolSelectionSaveError(`Tool selection was not saved. ${message}`);
+  };
+
+  const selectTools = (disabledIds: string[]) => {
+    const revision = ++toolSelectionRevisionRef.current;
+    setDisabledToolDefinitionIds(disabledIds);
+    setHasThreadToolSelection(true);
+    setToolSelectionSaveError("");
+    if (!activeSessionId) return;
+
+    void persistToolSelection(activeSessionId, disabledIds).catch((caught) =>
+      reportToolSelectionSaveError(caught, revision)
+    );
+  };
+
   const sendTurn = async (
     parts: ChatMessagePart[],
     options: {
@@ -298,7 +360,7 @@ export function ChatPage(props: {
       (part): part is Extract<ChatMessagePart, { type: "attachment" }> =>
         part.type === "attachment"
     );
-    if ((!content && attachments.length === 0) || isStreaming) return;
+    if ((!content && attachments.length === 0) || isStreaming || isStopping) return;
 
     const createdAt = new Date().toISOString();
     const modelSelection = activeModelSelection;
@@ -344,6 +406,15 @@ export function ChatPage(props: {
         await persistModelSelection(sessionId, modelSelection).catch((caught) =>
           reportModelSelectionSaveError(caught, revision)
         );
+        if (hasThreadToolSelection) {
+          const toolRevision = ++toolSelectionRevisionRef.current;
+          await persistToolSelection(
+            sessionId,
+            disabledToolDefinitionIds
+          ).catch((caught) =>
+            reportToolSelectionSaveError(caught, toolRevision)
+          );
+        }
       }
 
       let token = await props.ensureSession();
@@ -430,11 +501,9 @@ export function ChatPage(props: {
           ) {
             assistantServerId = payload.assistantMessageId;
           }
-          if (event.type !== "text-delta" || typeof payload.delta !== "string") return;
-          assistantParts = appendAgentStreamEvent(assistantParts, {
-            type: "text-delta",
-            delta: payload.delta
-          });
+          const streamEvent = agentStreamEventFromRunEvent(event);
+          if (!streamEvent) return;
+          assistantParts = appendAgentStreamEvent(assistantParts, streamEvent);
           updateAssistantMessage(assistantMessage.id, (message) => ({
             ...message,
             parts: assistantParts
@@ -476,13 +545,14 @@ export function ChatPage(props: {
       updateAssistantMessage(assistantMessage.id, (message) => ({
         ...message,
         serverId: assistantServerId,
+        parts: finalizePendingToolParts(message.parts, "Tool did not complete"),
         status: "complete"
       }));
     } catch (caught) {
       if (caught instanceof DOMException && caught.name === "AbortError") {
         updateAssistantMessage(assistantMessage.id, (current) => ({
           ...current,
-          parts: assistantParts,
+          parts: finalizePendingToolParts(assistantParts, "Stopped by user"),
           status: "complete"
         }));
       } else {
@@ -492,7 +562,7 @@ export function ChatPage(props: {
           ...current,
           status: "error",
           parts: chatMessageText(current)
-            ? current.parts
+            ? finalizePendingToolParts(current.parts, message)
             : [{ type: "text", text: message }]
         }));
       }
@@ -528,7 +598,12 @@ export function ChatPage(props: {
 
   const submit = async (prompt: PromptInputMessage) => {
     const content = prompt.text.trim();
-    if ((!content && prompt.files.length === 0) || isStreaming || isRewriting) return;
+    if (
+      (!content && prompt.files.length === 0) ||
+      isStreaming ||
+      isStopping ||
+      isRewriting
+    ) return;
 
     const attachments = await promptAttachments(prompt.files);
     const parts: ChatMessagePart[] = [
@@ -639,6 +714,10 @@ export function ChatPage(props: {
       return;
     }
     stopRequestedRef.current = true;
+    setIsStopping(true);
+    // The run is durable, so cancel it server-side independently of this
+    // subscriber. Abort the local stream immediately so Stop feels immediate.
+    abortControllerRef.current?.abort(new DOMException("Run stopped", "AbortError"));
     void (async () => {
       try {
         let token = await props.ensureSession();
@@ -651,6 +730,8 @@ export function ChatPage(props: {
         }
       } catch (caught) {
         setError(caught instanceof Error ? caught.message : "Unable to cancel run");
+      } finally {
+        setIsStopping(false);
       }
     })();
   };
@@ -677,7 +758,6 @@ export function ChatPage(props: {
             <MessageScrollerItem
               key={message.id}
               messageId={message.id}
-              scrollAnchor={message.role === "user"}
               animateEntrance={message.animateEntrance}
             >
               <Message
@@ -709,7 +789,12 @@ export function ChatPage(props: {
                     ? () => editMessage(message)
                     : undefined
                 }
-                actionsDisabled={isStreaming || isRewriting}
+                actionsDisabled={isStreaming || isStopping || isRewriting}
+                onToolApproval={(approvalId, approve) =>
+                  props.runApiRequest((token) =>
+                    decideToolApproval(props.apiBaseUrl, approvalId, token, { approve })
+                  )
+                }
               />
             </MessageScrollerItem>
           ))
@@ -770,6 +855,15 @@ export function ChatPage(props: {
                   <PromptInputActionMenuTrigger tooltip="Add context" />
                   <PromptInputActionMenuContent>
                     <PromptInputActionAddAttachments label="Add text files" />
+                    <DropdownMenuSeparator />
+                    <SessionToolsMenu
+                      apiBaseUrl={props.apiBaseUrl}
+                      runApiRequest={props.runApiRequest}
+                      disabledToolDefinitionIds={disabledToolDefinitionIds}
+                      disabled={isStreaming || isStopping}
+                      onChange={selectTools}
+                      onManageTools={() => navigate("/settings/my-tools")}
+                    />
                   </PromptInputActionMenuContent>
                 </PromptInputActionMenu>
 
@@ -778,7 +872,7 @@ export function ChatPage(props: {
                     <PromptInputSelect
                       value={activeModelSelection}
                       onValueChange={(value) => selectModel(value ?? "")}
-                      disabled={isStreaming}
+                      disabled={isStreaming || isStopping}
                     >
                       <PromptInputSelectTrigger className="max-w-52">
                         <PromptInputSelectValue placeholder="Select model">
@@ -816,7 +910,8 @@ export function ChatPage(props: {
                 input={input}
                 error={error}
                 isStreaming={isStreaming}
-                disabled={isRewriting}
+                isStopping={isStopping}
+                disabled={isRewriting || isStopping}
                 modelSelection={activeModelSelection}
                 onStop={stop}
               />
@@ -827,12 +922,12 @@ export function ChatPage(props: {
               {error}
             </p>
           ) : null}
-          {unavailableModelNotice || modelSelectionSaveError ? (
+          {unavailableModelNotice || modelSelectionSaveError || toolSelectionSaveError ? (
             <p
               className="mt-2 px-1 text-xs text-amber-700 dark:text-amber-400"
-              role={modelSelectionSaveError ? "alert" : "status"}
+              role={modelSelectionSaveError || toolSelectionSaveError ? "alert" : "status"}
             >
-              {modelSelectionSaveError || unavailableModelNotice}
+              {modelSelectionSaveError || toolSelectionSaveError || unavailableModelNotice}
             </p>
           ) : null}
           <p className="mt-2 text-center text-[0.6875rem] text-[var(--color-muted)]">
@@ -896,6 +991,7 @@ function ChatSubmit(props: {
   input: string;
   error: string;
   isStreaming: boolean;
+  isStopping: boolean;
   disabled: boolean;
   modelSelection: string;
   onStop: () => void;
@@ -903,8 +999,19 @@ function ChatSubmit(props: {
   const attachments = usePromptInputAttachments();
   return (
     <PromptInputSubmit
-      status={props.isStreaming ? "streaming" : props.error ? "error" : "ready"}
+      status={props.isStopping
+        ? "submitted"
+        : props.isStreaming
+          ? "streaming"
+          : props.error
+            ? "error"
+            : "ready"}
       onStop={props.onStop}
+      title={props.isStopping
+        ? "Stopping"
+        : props.isStreaming
+          ? "Stop generating"
+          : "Send message"}
       disabled={
         props.disabled ||
         !props.isStreaming &&

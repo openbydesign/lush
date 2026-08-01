@@ -74,12 +74,17 @@ export function appendAgentStreamEvent(
           type: "tool",
           toolCallId: event.toolCallId,
           toolName: event.toolName,
+          ...toolPresentation(event),
           state: "input-available",
           input: event.input
         }
       ];
     case "tool-output":
       return upsertToolOutput(parts, event);
+    case "tool-approval-required":
+      return upsertToolApproval(parts, event);
+    case "tool-approval-resolved":
+      return resolveToolApproval(parts, event);
     case "source":
       return parts.some(
         (part) => part.type === "source" && part.sourceId === event.sourceId
@@ -97,6 +102,24 @@ export function appendAgentStreamEvent(
     default:
       return parts;
   }
+}
+
+export function finalizePendingToolParts(
+  parts: ChatMessagePart[],
+  errorText: string
+): ChatMessagePart[] {
+  return parts.map((part) =>
+    part.type === "tool" &&
+    part.state !== "output-available" &&
+    part.state !== "output-denied" &&
+    part.state !== "output-error"
+      ? {
+          ...part,
+          state: "output-error" as const,
+          errorText
+        }
+      : part
+  );
 }
 
 export async function readAgentEventStream(
@@ -149,6 +172,70 @@ export async function readAgentRunEventStream(
   }
   const tail = buffer.trim();
   if (tail) onEvent(parseAgentRunEvent(tail));
+}
+
+export function agentStreamEventFromRunEvent(
+  event: AgentRunEvent
+): AgentStreamEvent | undefined {
+  const payload = isRecord(event.payload) ? event.payload : {};
+  switch (event.type) {
+    case "text-delta":
+      return typeof payload.delta === "string"
+        ? { type: "text-delta", delta: payload.delta }
+        : undefined;
+    case "reasoning-delta":
+      return typeof payload.delta === "string"
+        ? { type: "reasoning-delta", delta: payload.delta }
+        : undefined;
+    case "tool-input":
+      return strings(payload, ["toolCallId", "toolName"])
+        ? {
+            type: "tool-input",
+            toolCallId: payload.toolCallId,
+            toolName: payload.toolName,
+            ...toolPresentation(payload),
+            input: payload.input
+          }
+        : undefined;
+    case "tool-output":
+      return strings(payload, ["toolCallId", "toolName"])
+        ? {
+            type: "tool-output",
+            toolCallId: payload.toolCallId,
+            toolName: payload.toolName,
+            ...toolPresentation(payload),
+            ...(typeof payload.errorText === "string"
+              ? { errorText: payload.errorText }
+              : { output: payload.output })
+          }
+        : undefined;
+    case "tool-approval-required":
+      return strings(payload, ["approvalId", "toolCallId", "toolName", "expiresAt"])
+        ? {
+            type: "tool-approval-required",
+            approvalId: payload.approvalId,
+            toolCallId: payload.toolCallId,
+            toolName: payload.toolName,
+            ...toolPresentation(payload),
+            expiresAt: payload.expiresAt
+          }
+        : undefined;
+    case "tool-approval-resolved":
+      return strings(payload, ["approvalId", "toolCallId", "toolName"]) &&
+        (payload.decision === "approved" ||
+          payload.decision === "denied" ||
+          payload.decision === "expired")
+        ? {
+            type: "tool-approval-resolved",
+            approvalId: payload.approvalId,
+            toolCallId: payload.toolCallId,
+            toolName: payload.toolName,
+            decision: payload.decision
+          }
+        : undefined;
+    default:
+      return undefined;
+  }
 }
 
 export async function promptAttachments(
@@ -291,14 +378,17 @@ function upsertToolOutput(
   parts: ChatMessagePart[],
   event: Extract<AgentStreamEvent, { type: "tool-output" }>
 ) {
-  const existing = parts.findIndex(
-    (part) => part.type === "tool" && part.toolCallId === event.toolCallId
-  );
+  const existing = lastToolPartIndex(parts, event.toolCallId);
   const output = {
     type: "tool" as const,
     toolCallId: event.toolCallId,
     toolName: event.toolName,
-    state: event.errorText ? "output-error" as const : "output-available" as const,
+    ...toolPresentation(event),
+    state: event.errorText === "approval_denied"
+      ? "output-denied" as const
+      : event.errorText
+        ? "output-error" as const
+        : "output-available" as const,
     output: event.output,
     errorText: event.errorText
   };
@@ -308,4 +398,89 @@ function upsertToolOutput(
       ? { ...part, ...output, input: part.input }
       : part
   );
+}
+
+function upsertToolApproval(
+  parts: ChatMessagePart[],
+  event: Extract<AgentStreamEvent, { type: "tool-approval-required" }>
+) {
+  const existing = lastToolPartIndex(parts, event.toolCallId);
+  const approval = {
+    type: "tool" as const,
+    toolCallId: event.toolCallId,
+    toolName: event.toolName,
+    ...toolPresentation(event),
+    state: "approval-requested" as const,
+    approvalId: event.approvalId,
+    approvalExpiresAt: event.expiresAt
+  };
+  if (existing < 0) return [...parts, approval];
+  return parts.map((part, index) =>
+    index === existing && part.type === "tool"
+      ? { ...part, ...approval, input: part.input }
+      : part
+  );
+}
+
+function resolveToolApproval(
+  parts: ChatMessagePart[],
+  event: Extract<AgentStreamEvent, { type: "tool-approval-resolved" }>
+) {
+  const existing = lastToolPartIndex(parts, event.toolCallId);
+  if (existing < 0) return parts;
+  return parts.map((part, index) =>
+    index === existing && part.type === "tool"
+      ? {
+          ...part,
+          state: event.decision === "approved"
+            ? "approval-responded" as const
+            : event.decision === "denied"
+              ? "output-denied" as const
+              : "output-error" as const,
+          approvalDecision: event.decision,
+          ...(event.decision === "expired" ? { errorText: "Approval expired" } : {})
+        }
+      : part
+  );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function toolPresentation(value: Record<string, unknown>): {
+  toolTitle?: string;
+  connectionLabel?: string;
+  connectionSource?: "mcp" | "openapi" | "native";
+  connectionIconUrl?: string;
+} {
+  return {
+    ...(typeof value.toolTitle === "string" ? { toolTitle: value.toolTitle } : {}),
+    ...(typeof value.connectionLabel === "string"
+      ? { connectionLabel: value.connectionLabel }
+      : {}),
+    ...(value.connectionSource === "mcp" ||
+      value.connectionSource === "openapi" ||
+      value.connectionSource === "native"
+      ? { connectionSource: value.connectionSource }
+      : {}),
+    ...(typeof value.connectionIconUrl === "string"
+      ? { connectionIconUrl: value.connectionIconUrl }
+      : {})
+  };
+}
+
+function strings<T extends string>(
+  value: Record<string, unknown>,
+  keys: T[]
+): value is Record<T, string> & Record<string, unknown> {
+  return keys.every((key) => typeof value[key] === "string");
+}
+
+function lastToolPartIndex(parts: ChatMessagePart[], toolCallId: string) {
+  for (let index = parts.length - 1; index >= 0; index -= 1) {
+    const part = parts[index];
+    if (part?.type === "tool" && part.toolCallId === toolCallId) return index;
+  }
+  return -1;
 }

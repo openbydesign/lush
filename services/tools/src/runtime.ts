@@ -100,6 +100,7 @@ export type ToolDefinitionSummary = {
   /** Stable digest a caller can pin and pass back as expectedDefinitionDigest. */
   definitionDigest: string;
   enabled: boolean;
+  timeoutMs: number | null;
   policy: ToolPolicyExplanation;
 };
 
@@ -126,8 +127,14 @@ export type UpdateToolConnectionRequest = {
 
 export type UpdateToolDefinitionRequest = {
   definitionId: string;
-  enabled: boolean;
+  enabled?: boolean;
+  timeoutMs?: number | null;
 };
+
+export const toolDefinitionTimeoutBounds = {
+  minMs: 1_000,
+  maxMs: 90_000
+} as const;
 
 export type ToolGatewaySettings = {
   enabled: boolean;
@@ -472,10 +479,29 @@ export async function updateToolDefinition(
   principal: ToolsPrincipal,
   request: UpdateToolDefinitionRequest
 ): Promise<ToolDefinitionSummary> {
-  if (!isUuid(request.definitionId) || typeof request.enabled !== "boolean") {
+  const hasEnabled = request.enabled !== undefined;
+  const hasTimeout = request.timeoutMs !== undefined;
+  if (
+    !isUuid(request.definitionId) ||
+    (!hasEnabled && !hasTimeout) ||
+    (hasEnabled && typeof request.enabled !== "boolean") ||
+    (hasTimeout && request.timeoutMs !== null && typeof request.timeoutMs !== "number")
+  ) {
     throw new ToolError(
       "invalid_definition",
-      "A valid definitionId and enabled boolean are required"
+      "A valid definitionId and at least one definition setting are required"
+    );
+  }
+  if (
+    request.timeoutMs !== undefined &&
+    request.timeoutMs !== null &&
+    (!Number.isInteger(request.timeoutMs) ||
+      request.timeoutMs < toolDefinitionTimeoutBounds.minMs ||
+      request.timeoutMs > toolDefinitionTimeoutBounds.maxMs)
+  ) {
+    throw new ToolError(
+      "invalid_definition_timeout",
+      "Tool timeout must be null or an integer from 1000 through 90000 milliseconds"
     );
   }
   const definition = await getDb()
@@ -492,7 +518,11 @@ export async function updateToolDefinition(
   );
   const updated = await getDb()
     .updateTable("toolDefinitions")
-    .set({ enabled: request.enabled, updatedAt: new Date() })
+    .set({
+      ...(hasEnabled ? { enabled: request.enabled } : {}),
+      ...(hasTimeout ? { timeoutMs: request.timeoutMs } : {}),
+      updatedAt: new Date()
+    })
     .where("id", "=", definition.id)
     .returningAll()
     .executeTakeFirstOrThrow();
@@ -947,6 +977,7 @@ function summarizeDefinition(
     annotations: row.annotations,
     definitionDigest: row.definitionDigest,
     enabled: row.enabled,
+    timeoutMs: row.timeoutMs,
     policy: explainToolPolicy(row.annotations, connectionPolicy)
   };
 }

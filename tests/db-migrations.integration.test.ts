@@ -5,6 +5,8 @@ import { sessionIpColumns } from "../packages/db/src/migrations/009_session_ip_c
 import { agentRuns } from "../packages/db/src/migrations/013_agent_runs";
 import { toolCatalogAcknowledgment } from "../packages/db/src/migrations/015_tool_catalog_acknowledgment";
 import { toolGatewayRolloutConvergence } from "../packages/db/src/migrations/016_tool_gateway_rollout_convergence";
+import { toolCallDefinitionDigest } from "../packages/db/src/migrations/020_tool_call_definition_digest";
+import { toolDefinitionTimeout } from "../packages/db/src/migrations/021_tool_definition_timeout";
 import { integrationDatabaseUrl } from "./integration-database";
 
 const databaseUrl = integrationDatabaseUrl();
@@ -127,6 +129,54 @@ if (!databaseUrl) {
       expect(columns.rows).toHaveLength(1);
       expect(columns.rows[0]?.isNullable).toBe("NO");
       expect(columns.rows[0]?.columnDefault).toBe("false");
+    } finally {
+      await harness.destroy();
+    }
+  });
+
+  test("tool-call digest convergence repairs an already-recorded old schema", async () => {
+    const harness = await createIsolatedTestDatabase(databaseUrl);
+
+    try {
+      await sql`
+        alter table tool_calls drop column definition_digest
+      `.execute(harness.db);
+
+      await toolCallDefinitionDigest.up(harness.db);
+      await toolCallDefinitionDigest.up(harness.db);
+
+      const columns = await sql<{ isNullable: string }>`
+        select is_nullable
+        from information_schema.columns
+        where table_schema = current_schema()
+          and table_name = 'tool_calls'
+          and column_name = 'definition_digest'
+      `.execute(harness.db);
+      expect(columns.rows).toEqual([{ isNullable: "NO" }]);
+    } finally {
+      await harness.destroy();
+    }
+  });
+
+  test("tool definition timeout migration is replayable", async () => {
+    const harness = await createIsolatedTestDatabase(databaseUrl);
+
+    try {
+      await sql`
+        alter table tool_definitions drop column timeout_ms
+      `.execute(harness.db);
+
+      await toolDefinitionTimeout.up(harness.db);
+      await toolDefinitionTimeout.up(harness.db);
+
+      const columns = await sql<{ isNullable: string }>`
+        select is_nullable
+        from information_schema.columns
+        where table_schema = current_schema()
+          and table_name = 'tool_definitions'
+          and column_name = 'timeout_ms'
+      `.execute(harness.db);
+      expect(columns.rows).toEqual([{ isNullable: "YES" }]);
     } finally {
       await harness.destroy();
     }

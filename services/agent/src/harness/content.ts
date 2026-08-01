@@ -51,6 +51,9 @@ export type ToolResultContent = {
 export type ConfirmationContent = {
   type: "confirmation";
   id: string;
+  toolCallId: string;
+  toolName: string;
+  expiresAt: string;
   question?: string;
 };
 

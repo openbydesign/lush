@@ -17,6 +17,8 @@ import { toolGatewayRolloutConvergence } from "./016_tool_gateway_rollout_conver
 import { builtinToolConnections } from "./017_builtin_tool_connections";
 import { builtinToolEnablement } from "./018_builtin_tool_enablement";
 import { retireCurrentTimeTool } from "./019_retire_current_time_tool";
+import { toolCallDefinitionDigest } from "./020_tool_call_definition_digest";
+import { toolDefinitionTimeout } from "./021_tool_definition_timeout";
 import type { Migration } from "./types";
 
 export const migrations: Migration[] = [
@@ -38,5 +40,7 @@ export const migrations: Migration[] = [
   toolGatewayRolloutConvergence,
   builtinToolConnections,
   builtinToolEnablement,
-  retireCurrentTimeTool
+  retireCurrentTimeTool,
+  toolCallDefinitionDigest,
+  toolDefinitionTimeout
 ];
