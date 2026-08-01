@@ -29,7 +29,11 @@ describe("app Code session polling", () => {
       initialCursor: 0,
       request: () => staleRequest.promise,
       update: (page) => {
-        activeSession = applyCodeSessionEventPage(activeSession, "session-a", page)!;
+        activeSession = applyCodeSessionEventPage(
+          activeSession,
+          "session-a",
+          page
+        )!;
       },
       onError: (reason) => errors.push(reason)
     });
@@ -43,7 +47,11 @@ describe("app Code session polling", () => {
       initialCursor: 0,
       request: () => currentRequest.promise,
       update: (page) => {
-        activeSession = applyCodeSessionEventPage(activeSession, "session-a", page)!;
+        activeSession = applyCodeSessionEventPage(
+          activeSession,
+          "session-a",
+          page
+        )!;
       },
       onError: (reason) => errors.push(reason)
     });
@@ -64,14 +72,87 @@ describe("app Code session polling", () => {
     ]);
     expect(errors).toEqual([]);
   });
+
+  test("reseeds polling after a concurrent same-session reload", async () => {
+    let activeSession = session("session-a", [event(10)]);
+    const staleRequest = Promise.withResolvers<EventPage>();
+    const currentRequest = Promise.withResolvers<EventPage>();
+    const requestedCursors: number[] = [];
+    const errors: unknown[] = [];
+
+    const stalePoll = createCodeSessionPoll({
+      initialCursor: activeSession.events.at(-1)?.sequence ?? 0,
+      request: (cursor) => {
+        requestedCursors.push(cursor);
+        return staleRequest.promise;
+      },
+      update: (page) => {
+        activeSession = applyCodeSessionEventPage(
+          activeSession,
+          "session-a",
+          page
+        )!;
+      },
+      onError: (reason) => errors.push(reason)
+    });
+    const staleTick = stalePoll.tick();
+
+    // A same-ID full-session reload replaces the event list while the old
+    // cursor request is still in flight. The provider must stop that poll
+    // generation and start a new one seeded from the replacement session.
+    stalePoll.stop();
+    activeSession = session("session-a", [event(3), event(4)]);
+
+    const currentPoll = createCodeSessionPoll({
+      initialCursor: activeSession.events.at(-1)?.sequence ?? 0,
+      request: (cursor) => {
+        requestedCursors.push(cursor);
+        return currentRequest.promise;
+      },
+      update: (page) => {
+        activeSession = applyCodeSessionEventPage(
+          activeSession,
+          "session-a",
+          page
+        )!;
+      },
+      onError: (reason) => errors.push(reason)
+    });
+    const currentTick = currentPoll.tick();
+
+    currentRequest.resolve(eventPage({
+      events: [event(5)],
+      nextCursor: 5,
+      messages: [message("replacement delta")]
+    }));
+    await currentTick;
+
+    staleRequest.resolve(eventPage({
+      events: [event(11)],
+      nextCursor: 11,
+      messages: [message("stale delta")]
+    }));
+    await staleTick;
+
+    expect(requestedCursors).toEqual([10, 4]);
+    expect(activeSession.events.map(({ sequence }) => sequence)).toEqual([
+      3,
+      4,
+      5
+    ]);
+    expect(activeSession.messages.map(({ content }) => content)).toEqual([
+      "replacement delta"
+    ]);
+    expect(errors).toEqual([]);
+  });
 });
 
-function session(id: string): CodeSession {
+function session(id: string, events: EventPage["events"] = []): CodeSession {
   return {
     id,
     status: "running",
     messages: [],
-    events: []
+    events
   } as CodeSession;
 }
 

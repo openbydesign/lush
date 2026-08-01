@@ -16,6 +16,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useReducer,
   useRef,
   useState,
   type ReactNode
@@ -54,6 +55,10 @@ export function CodeProvider({ children }: { children: ReactNode }) {
   const [harnesses, setHarnesses] = useState<HarnessInstallation[]>([]);
   const [sessions, setSessions] = useState<CodeSessionSummary[]>([]);
   const [activeSession, setActiveSession] = useState<CodeSession>();
+  const [activeSessionGeneration, bumpActiveSessionGeneration] = useReducer(
+    (value: number) => value + 1,
+    0
+  );
   const activeSessionIdRef = useRef<string | undefined>(undefined);
 
   const request = useCallback(async <Result,>(path: string, init?: RequestInit) => {
@@ -90,10 +95,14 @@ export function CodeProvider({ children }: { children: ReactNode }) {
     activeSessionIdRef.current = id;
     if (!id) {
       setActiveSession(undefined);
+      bumpActiveSessionGeneration();
       return;
     }
     const session = await request<CodeSession>(`/v1/sessions/${id}`);
-    if (activeSessionIdRef.current === id) setActiveSession(session);
+    if (activeSessionIdRef.current === id) {
+      setActiveSession(session);
+      bumpActiveSessionGeneration();
+    }
   }, [request]);
 
   useEffect(() => {
@@ -135,7 +144,14 @@ export function CodeProvider({ children }: { children: ReactNode }) {
       poll.stop();
       window.clearInterval(timer);
     };
-  }, [activeSession?.id, activeSession?.status, connection, refresh, request]);
+  }, [
+    activeSession?.id,
+    activeSession?.status,
+    activeSessionGeneration,
+    connection,
+    refresh,
+    request
+  ]);
 
   const value = useMemo<CodeContextValue>(() => ({
     availability,
@@ -159,6 +175,7 @@ export function CodeProvider({ children }: { children: ReactNode }) {
       });
       activeSessionIdRef.current = session.id;
       setActiveSession(session);
+      bumpActiveSessionGeneration();
       await refresh();
       return session;
     },
@@ -170,6 +187,7 @@ export function CodeProvider({ children }: { children: ReactNode }) {
         body: JSON.stringify({ input })
       });
       setActiveSession(session);
+      bumpActiveSessionGeneration();
     },
     async interrupt() {
       if (!activeSessionIdRef.current) return;
@@ -180,6 +198,7 @@ export function CodeProvider({ children }: { children: ReactNode }) {
       if (activeSessionIdRef.current === id) {
         activeSessionIdRef.current = undefined;
         setActiveSession(undefined);
+        bumpActiveSessionGeneration();
       }
       await refresh();
     },
