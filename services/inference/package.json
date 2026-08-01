@@ -12,6 +12,7 @@
   },
   "exports": {
     "./openai-compatible": "./src/openai-compatible.ts",
+    "./openai-api": "./src/openai-api.ts",
     "./spec": "./src/spec.ts",
     "./runtime": "./src/runtime.ts",
     "./tool-chat": "./src/tool-chat.ts"

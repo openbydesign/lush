@@ -175,6 +175,38 @@ export type AccessSession = {
   session: CurrentSession;
 };
 
+export type ApiTokenScope =
+  | "inference:models:read"
+  | "inference:invoke";
+
+export type ApiToken = {
+  id: string;
+  organizationId: string;
+  name: string;
+  prefix: string;
+  scopes: ApiTokenScope[];
+  createdByUserId: string | null;
+  expiresAt: string | null;
+  lastUsedAt: string | null;
+  revokedAt: string | null;
+  createdAt: string;
+};
+
+export type ListApiTokensResponse = { tokens: ApiToken[] };
+
+export type CreateApiTokenRequest = {
+  name: string;
+  scopes: ApiTokenScope[];
+  expiresInDays?: number;
+};
+
+export type CreateApiTokenResponse = {
+  token: ApiToken;
+  secret: string;
+};
+
+export type RevokeApiTokenResponse = { token: ApiToken };
+
 export type RegisterAccountResponse = EmailVerificationRequired;
 
 
@@ -277,6 +309,25 @@ export type UpdateInferenceModelDefaultRequest = {
   mode: WorkspaceMode;
   modelSelection: string;
 };
+
+export type OpenAICompatibleModel = {
+  id: string;
+  object: "model";
+  created: number;
+  owned_by: string;
+};
+
+export type OpenAICompatibleModelList = {
+  object: "list";
+  data: OpenAICompatibleModel[];
+};
+
+export type OpenAICompatibleRequest = {
+  model: string;
+  [key: string]: unknown;
+};
+
+export type OpenAICompatibleResponse = Record<string, unknown>;
 
 
 
@@ -896,6 +947,32 @@ export const apiRoutes = [
     "kind": "json"
   },
   {
+    "id": "listApiTokens",
+    "method": "GET",
+    "path": "/v1beta/tokens",
+    "responseType": "ListApiTokensResponse",
+    "auth": true,
+    "kind": "json"
+  },
+  {
+    "id": "createApiToken",
+    "method": "POST",
+    "path": "/v1beta/tokens",
+    "requestType": "CreateApiTokenRequest",
+    "responseType": "CreateApiTokenResponse",
+    "auth": true,
+    "kind": "json"
+  },
+  {
+    "id": "revokeApiToken",
+    "method": "POST",
+    "path": "/v1beta/tokens/:tokenId/revoke",
+    "requestType": "Record<string, never>",
+    "responseType": "RevokeApiTokenResponse",
+    "auth": true,
+    "kind": "json"
+  },
+  {
     "id": "fetchInferenceConfig",
     "method": "GET",
     "path": "/v1beta/inference/config",
@@ -954,6 +1031,49 @@ export const apiRoutes = [
     "path": "/v1beta/inference/model-defaults/update",
     "requestType": "UpdateInferenceModelDefaultRequest",
     "responseType": "InferenceConfig",
+    "auth": true,
+    "kind": "json"
+  },
+  {
+    "id": "listOpenAICompatibleModels",
+    "method": "GET",
+    "path": "/v1beta/inference/v1/models",
+    "responseType": "OpenAICompatibleModelList",
+    "auth": true,
+    "kind": "json"
+  },
+  {
+    "id": "retrieveOpenAICompatibleModel",
+    "method": "GET",
+    "path": "/v1beta/inference/v1/models/:model",
+    "responseType": "OpenAICompatibleModel",
+    "auth": true,
+    "kind": "json"
+  },
+  {
+    "id": "createOpenAICompatibleChatCompletion",
+    "method": "POST",
+    "path": "/v1beta/inference/v1/chat/completions",
+    "requestType": "OpenAICompatibleRequest",
+    "responseType": "OpenAICompatibleResponse",
+    "auth": true,
+    "kind": "stream"
+  },
+  {
+    "id": "createOpenAICompatibleResponse",
+    "method": "POST",
+    "path": "/v1beta/inference/v1/responses",
+    "requestType": "OpenAICompatibleRequest",
+    "responseType": "OpenAICompatibleResponse",
+    "auth": true,
+    "kind": "stream"
+  },
+  {
+    "id": "createOpenAICompatibleEmbedding",
+    "method": "POST",
+    "path": "/v1beta/inference/v1/embeddings",
+    "requestType": "OpenAICompatibleRequest",
+    "responseType": "OpenAICompatibleResponse",
     "auth": true,
     "kind": "json"
   },
@@ -1285,6 +1405,9 @@ const REMOVE_ORGANIZATION_MEMBER_ROUTE = apiRoutes.find((route) => route.id === 
 const CREATE_ORGANIZATION_INVITE_ROUTE = apiRoutes.find((route) => route.id === "createOrganizationInvite")!;
 const LIST_ORGANIZATION_INVITES_ROUTE = apiRoutes.find((route) => route.id === "listOrganizationInvites")!;
 const RESPOND_TO_ORGANIZATION_INVITE_ROUTE = apiRoutes.find((route) => route.id === "respondToOrganizationInvite")!;
+const LIST_API_TOKENS_ROUTE = apiRoutes.find((route) => route.id === "listApiTokens")!;
+const CREATE_API_TOKEN_ROUTE = apiRoutes.find((route) => route.id === "createApiToken")!;
+const REVOKE_API_TOKEN_ROUTE = apiRoutes.find((route) => route.id === "revokeApiToken")!;
 const FETCH_INFERENCE_CONFIG_ROUTE = apiRoutes.find((route) => route.id === "fetchInferenceConfig")!;
 const CREATE_INFERENCE_PROVIDER_ROUTE = apiRoutes.find((route) => route.id === "createInferenceProvider")!;
 const UPDATE_INFERENCE_PROVIDER_ROUTE = apiRoutes.find((route) => route.id === "updateInferenceProvider")!;
@@ -1292,6 +1415,11 @@ const REFRESH_INFERENCE_PROVIDER_MODELS_ROUTE = apiRoutes.find((route) => route.
 const UPDATE_INFERENCE_MODEL_ROUTE = apiRoutes.find((route) => route.id === "updateInferenceModel")!;
 const DELETE_INFERENCE_PROVIDER_ROUTE = apiRoutes.find((route) => route.id === "deleteInferenceProvider")!;
 const UPDATE_INFERENCE_MODEL_DEFAULT_ROUTE = apiRoutes.find((route) => route.id === "updateInferenceModelDefault")!;
+const LIST_OPEN_A_I_COMPATIBLE_MODELS_ROUTE = apiRoutes.find((route) => route.id === "listOpenAICompatibleModels")!;
+const RETRIEVE_OPEN_A_I_COMPATIBLE_MODEL_ROUTE = apiRoutes.find((route) => route.id === "retrieveOpenAICompatibleModel")!;
+const CREATE_OPEN_A_I_COMPATIBLE_CHAT_COMPLETION_ROUTE = apiRoutes.find((route) => route.id === "createOpenAICompatibleChatCompletion")!;
+const CREATE_OPEN_A_I_COMPATIBLE_RESPONSE_ROUTE = apiRoutes.find((route) => route.id === "createOpenAICompatibleResponse")!;
+const CREATE_OPEN_A_I_COMPATIBLE_EMBEDDING_ROUTE = apiRoutes.find((route) => route.id === "createOpenAICompatibleEmbedding")!;
 const LIST_PROJECTS_ROUTE = apiRoutes.find((route) => route.id === "listProjects")!;
 const CREATE_PROJECT_ROUTE = apiRoutes.find((route) => route.id === "createProject")!;
 const FETCH_PROJECT_BY_ID_ROUTE = apiRoutes.find((route) => route.id === "fetchProjectById")!;
@@ -1835,6 +1963,68 @@ export async function respondToOrganizationInvite(
   return response.json() as Promise<RespondToOrganizationInviteResponse>;
 }
 
+export async function listApiTokens(
+  apiBaseUrl: string,
+  sessionToken: string | undefined,
+) {
+  const response = await fetch(apiUrl(apiBaseUrl, LIST_API_TOKENS_ROUTE.path), {
+    credentials: "include",
+    headers: {
+      ...authorizationHeaders(sessionToken),
+
+    }
+  });
+
+  if (!response.ok) {
+    throw await apiError("listApiTokens", response);
+  }
+
+  return response.json() as Promise<ListApiTokensResponse>;
+}
+
+export async function createApiToken(
+  apiBaseUrl: string,
+  sessionToken: string | undefined, body: CreateApiTokenRequest
+) {
+  const response = await fetch(apiUrl(apiBaseUrl, CREATE_API_TOKEN_ROUTE.path), {
+    method: "POST",
+    credentials: "include",
+    headers: {
+      ...authorizationHeaders(sessionToken),
+      "content-type": "application/json"
+    },
+    body: JSON.stringify(body)
+  });
+
+  if (!response.ok) {
+    throw await apiError("createApiToken", response);
+  }
+
+  return response.json() as Promise<CreateApiTokenResponse>;
+}
+
+export async function revokeApiToken(
+  apiBaseUrl: string,
+  tokenId: string,
+  sessionToken: string | undefined, body: Record<string, never>
+) {
+  const response = await fetch(apiUrl(apiBaseUrl, routePath(REVOKE_API_TOKEN_ROUTE.path, { tokenId })), {
+    method: "POST",
+    credentials: "include",
+    headers: {
+      ...authorizationHeaders(sessionToken),
+      "content-type": "application/json"
+    },
+    body: JSON.stringify(body)
+  });
+
+  if (!response.ok) {
+    throw await apiError("revokeApiToken", response);
+  }
+
+  return response.json() as Promise<RevokeApiTokenResponse>;
+}
+
 export async function fetchInferenceConfig(
   apiBaseUrl: string,
   sessionToken: string | undefined,
@@ -1978,6 +2168,100 @@ export async function updateInferenceModelDefault(
   }
 
   return response.json() as Promise<InferenceConfig>;
+}
+
+export async function listOpenAICompatibleModels(
+  apiBaseUrl: string,
+  sessionToken: string | undefined,
+) {
+  const response = await fetch(apiUrl(apiBaseUrl, LIST_OPEN_A_I_COMPATIBLE_MODELS_ROUTE.path), {
+    credentials: "include",
+    headers: {
+      ...authorizationHeaders(sessionToken),
+
+    }
+  });
+
+  if (!response.ok) {
+    throw await apiError("listOpenAICompatibleModels", response);
+  }
+
+  return response.json() as Promise<OpenAICompatibleModelList>;
+}
+
+export async function retrieveOpenAICompatibleModel(
+  apiBaseUrl: string,
+  model: string,
+  sessionToken: string | undefined,
+) {
+  const response = await fetch(apiUrl(apiBaseUrl, routePath(RETRIEVE_OPEN_A_I_COMPATIBLE_MODEL_ROUTE.path, { model })), {
+    credentials: "include",
+    headers: {
+      ...authorizationHeaders(sessionToken),
+
+    }
+  });
+
+  if (!response.ok) {
+    throw await apiError("retrieveOpenAICompatibleModel", response);
+  }
+
+  return response.json() as Promise<OpenAICompatibleModel>;
+}
+
+export function createOpenAICompatibleChatCompletion(
+  apiBaseUrl: string,
+  sessionToken: string | undefined, body: OpenAICompatibleRequest,
+  signal?: AbortSignal
+) {
+  return fetch(apiUrl(apiBaseUrl, CREATE_OPEN_A_I_COMPATIBLE_CHAT_COMPLETION_ROUTE.path), {
+    method: "POST",
+    credentials: "include",
+    headers: {
+      ...authorizationHeaders(sessionToken),
+      "content-type": "application/json"
+    },
+    body: JSON.stringify(body),
+    signal
+  });
+}
+
+export function createOpenAICompatibleResponse(
+  apiBaseUrl: string,
+  sessionToken: string | undefined, body: OpenAICompatibleRequest,
+  signal?: AbortSignal
+) {
+  return fetch(apiUrl(apiBaseUrl, CREATE_OPEN_A_I_COMPATIBLE_RESPONSE_ROUTE.path), {
+    method: "POST",
+    credentials: "include",
+    headers: {
+      ...authorizationHeaders(sessionToken),
+      "content-type": "application/json"
+    },
+    body: JSON.stringify(body),
+    signal
+  });
+}
+
+export async function createOpenAICompatibleEmbedding(
+  apiBaseUrl: string,
+  sessionToken: string | undefined, body: OpenAICompatibleRequest
+) {
+  const response = await fetch(apiUrl(apiBaseUrl, CREATE_OPEN_A_I_COMPATIBLE_EMBEDDING_ROUTE.path), {
+    method: "POST",
+    credentials: "include",
+    headers: {
+      ...authorizationHeaders(sessionToken),
+      "content-type": "application/json"
+    },
+    body: JSON.stringify(body)
+  });
+
+  if (!response.ok) {
+    throw await apiError("createOpenAICompatibleEmbedding", response);
+  }
+
+  return response.json() as Promise<OpenAICompatibleResponse>;
 }
 
 export async function listProjects(

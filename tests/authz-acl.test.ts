@@ -39,10 +39,14 @@ test("protected api routes have matching authz actions", () => {
 test("role action bindings keep users read-only for organization and inference settings", () => {
   expect(roleActionBindings.user).toContain("listOrganizationMembers");
   expect(roleActionBindings.user).toContain("fetchInferenceConfig");
+  expect(roleActionBindings.user).toContain("listOpenAICompatibleModels");
+  expect(roleActionBindings.user).toContain("createOpenAICompatibleResponse");
   expect(roleActionBindings.user).toContain("listSessions");
   expect(roleActionBindings.user).toContain("appendSessionMessage");
   expect(roleActionBindings.user).toContain("truncateSession");
   expect(roleActionBindings.user).not.toContain("updateCurrentOrganization");
+  expect(roleActionBindings.user).not.toContain("createApiToken");
+  expect(roleActionBindings.user).not.toContain("revokeApiToken");
   expect(roleActionBindings.user).not.toContain("createInferenceProvider");
   expect(roleActionBindings.user).not.toContain("refreshInferenceProviderModels");
   expect(roleActionBindings.user).not.toContain("updateInferenceModelDefault");
@@ -63,6 +67,9 @@ test("authorizePrincipal allows user read actions and rejects management actions
   expect(() =>
     authorizePrincipal(basePrincipal, "updateCurrentOrganization")
   ).toThrow(AuthError);
+  expect(() => authorizePrincipal(basePrincipal, "createApiToken")).toThrow(
+    AuthError
+  );
   expect(() =>
     authorizePrincipal(basePrincipal, "createInferenceProvider")
   ).toThrow(AuthError);

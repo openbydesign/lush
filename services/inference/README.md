@@ -7,6 +7,25 @@ This service owns the inference API contract and provider integration behavior.
 The API gateway imports and exposes the public routes, but provider credentials,
 model discovery, and model selection logic live here.
 
+## OpenAI-compatible API
+
+Authenticated organization members can use Lush as an OpenAI-compatible model
+router at `/v1beta/inference/v1`. The surface supports model listing and
+retrieval, Chat Completions, Responses, and Embeddings. Model identifiers are
+organization-scoped selections returned by `GET /models`; Lush replaces that
+selection with the provider-native model identifier and forwards the remaining
+request and response without narrowing the provider contract.
+
+Programmatic clients should create a top-level organization API token and grant
+only `inference:models:read` and/or `inference:invoke`. Interactive Lush access
+tokens remain accepted for signed-in clients.
+
+Only enabled models with an OpenAI-compatible interface (or unknown interface
+metadata) appear in this model list. When discovery supplied explicit interface
+capabilities, Lush rejects incompatible endpoints before contacting the
+provider. Missing capability metadata is treated as unknown and the provider
+remains authoritative.
+
 ## Provider Configuration
 
 Inference providers are organization-scoped database state. Configure providers

@@ -1,0 +1,13 @@
+---
+title: API tokens
+description: Organization API credentials and scoped access.
+---
+
+import spec from "../../../generated/openapi/tokens.json";
+import { OpenApiRouteGroup } from "../../../components/openapi-route-group";
+
+API tokens are top-level organization credentials. Each token grants only its
+recorded scopes and can be expired or revoked independently. Creation returns
+the bearer secret once; subsequent reads expose only its non-secret prefix.
+
+<OpenApiRouteGroup spec={spec} />

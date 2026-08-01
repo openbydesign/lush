@@ -42,6 +42,11 @@ const InferenceSettingsPage = lazy(() =>
     default: module.InferenceSettingsPage
   }))
 );
+const ApiTokensSettingsPage = lazy(() =>
+  import("../routes/settings/ApiTokensSettingsPage").then((module) => ({
+    default: module.ApiTokensSettingsPage
+  }))
+);
 const OrganizationSettingsPage = lazy(() =>
   import("../routes/settings/OrganizationSettingsPage").then((module) => ({
     default: module.OrganizationSettingsPage
@@ -105,6 +110,7 @@ const router = createBrowserRouter([
                   { path: "settings/appearance", element: <PersonalSettingsRoute pane="appearance" /> },
                   { path: "settings/my-tools", element: <ToolsSettingsRoute mode="personal" /> },
                   { path: "settings/organization", element: <OrganizationSettingsRoute /> },
+                  { path: "settings/api-tokens", element: <ApiTokensSettingsRoute /> },
                   { path: "settings/inference", element: <InferenceSettingsRoute /> },
                   { path: "settings/tool-gateway", element: <ToolsSettingsRoute mode="organization" /> },
                   { path: "settings/tools", element: <Navigate to="/settings/tool-gateway" replace /> },
@@ -275,6 +281,17 @@ function InferenceSettingsRoute() {
       onProviderDelete={app.removeInferenceProvider}
       onModelEnabledChange={app.setInferenceModelEnabled}
       onModelDefaultChange={app.setModelDefault}
+    />
+  );
+}
+
+function ApiTokensSettingsRoute() {
+  const app = useApp();
+  return (
+    <ApiTokensSettingsPage
+      apiBaseUrl={app.apiBaseUrl}
+      currentRole={app.membershipRole}
+      runApiRequest={app.runApiRequest}
     />
   );
 }

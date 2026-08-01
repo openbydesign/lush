@@ -13,6 +13,12 @@ explicit refresh routes mint a short-lived access JWT that the app caches in
 browser `sessionStorage` for the current tab and sends as a bearer token on
 protected API requests.
 
+Organization API tokens are separate, top-level credentials for programmatic
+access. Admins create and revoke them through `/v1beta/tokens`; each token stores
+explicit scopes, an optional expiration, and only a SHA-256 hash of its random
+secret. The secret is returned once. API tokens do not impersonate the creating
+user and are accepted only by services that explicitly authorize their scopes.
+
 Email verification uses random, single-use, expiring tokens stored only as
 SHA-256 hashes. Password-reset tokens use the same discipline, and a completed
 reset revokes every active session for the user. Re-registering an unverified

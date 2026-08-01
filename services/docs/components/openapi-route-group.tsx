@@ -131,7 +131,7 @@ export function OpenApiRouteGroup({ spec }: OpenApiRouteGroupProps) {
             </a>
             {operation.security ? (
               <span className="rounded-md border border-fd-border px-2 py-1 text-xs text-fd-muted-foreground">
-                Bearer JWT
+                Bearer token
               </span>
             ) : null}
           </div>

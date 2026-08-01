@@ -381,6 +381,10 @@ export async function resolveConnectedModel(
   };
 }
 
+export async function listConnectedProviders(organizationId: string) {
+  return loadConnectedProviders(organizationId);
+}
+
 export async function* streamInferenceChat({
   organizationId,
   modelSelection,

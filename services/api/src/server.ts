@@ -36,12 +36,15 @@ import {
   AuthError,
   type AuthzAction,
   authorizePrincipal,
+  apiTokenHasScope,
   bearerToken,
+  createApiToken,
   createOrganization,
   createOrganizationInvite,
   deleteCurrentOrganization,
   initializeJwtKeyStore,
   listOrganizationInvites,
+  listApiTokens,
   listOrganizationMembers,
   listOrganizations,
   login,
@@ -53,8 +56,10 @@ import {
   removeOrganizationMember,
   respondToOrganizationInvite,
   resolveAccessPrincipal,
+  resolveApiToken,
   resolveRefreshSession,
   revokeSession,
+  revokeApiToken,
   revokeUserSessions,
   switchOrganization,
   updateCurrentOrganization,
@@ -73,11 +78,21 @@ import {
   deleteInferenceProvider,
   getInferenceConfig,
   InferenceError,
+  listConnectedProviders,
   refreshInferenceProviderModels,
+  resolveConnectedModel,
   updateInferenceModelDefault,
   updateInferenceModel,
   updateInferenceProvider
 } from "@lush/inference/runtime";
+import {
+  findOpenAICompatibleModel,
+  listOpenAICompatibleModels,
+  OpenAICompatibleApiError,
+  parseOpenAICompatibleRequest,
+  proxyOpenAICompatibleRequest,
+  type OpenAICompatibleEndpoint
+} from "@lush/inference/openai-api";
 import {
   appendSessionMessage,
   appendSessionState,
@@ -371,6 +386,10 @@ function connectionIdParam(c: Context) {
 
 function approvalIdParam(c: Context) {
   return c.req.param("approvalId") ?? "";
+}
+
+function tokenIdParam(c: Context) {
+  return c.req.param("tokenId") ?? "";
 }
 
 function toolsPrincipal(principal: OrganizationPrincipal): ToolsPrincipal {
@@ -844,6 +863,42 @@ app.post(routePath("respondToOrganizationInvite"), async (c) => {
   }
 });
 
+app.get(routePath("listApiTokens"), async (c) => {
+  const authorized = await authenticateAuthorized(c, "listApiTokens");
+  if ("response" in authorized) return authorized.response;
+
+  try {
+    return c.json(await listApiTokens(authorized.auth.principal));
+  } catch (error) {
+    return handleAuthError(c, error, "Unable to list API tokens");
+  }
+});
+
+app.post(routePath("createApiToken"), async (c) => {
+  const authorized = await authenticateAuthorized(c, "createApiToken");
+  if ("response" in authorized) return authorized.response;
+
+  try {
+    const body = await c.req.json().catch(() => undefined);
+    return c.json(await createApiToken(authorized.auth.principal, body));
+  } catch (error) {
+    return handleAuthError(c, error, "Unable to create API token");
+  }
+});
+
+app.post(routePath("revokeApiToken"), async (c) => {
+  const authorized = await authenticateAuthorized(c, "revokeApiToken");
+  if ("response" in authorized) return authorized.response;
+
+  try {
+    return c.json(
+      await revokeApiToken(authorized.auth.principal, tokenIdParam(c))
+    );
+  } catch (error) {
+    return handleAuthError(c, error, "Unable to revoke API token");
+  }
+});
+
 app.get(routePath("fetchInferenceConfig"), async (c) => {
   const authorized = await authenticateAuthorized(c, "fetchInferenceConfig");
   if ("response" in authorized) {
@@ -979,6 +1034,79 @@ app.post(routePath("updateInferenceModelDefault"), async (c) => {
     return handleInferenceError(c, error, "Unable to update model default");
   }
 });
+
+app.get(routePath("listOpenAICompatibleModels"), async (c) => {
+  const authorized = await authenticateOpenAICompatible(
+    c,
+    "listOpenAICompatibleModels",
+    "inference:models:read"
+  );
+  if ("response" in authorized) return authorized.response;
+
+  try {
+    return c.json(
+      listOpenAICompatibleModels(
+        await listConnectedProviders(authorized.principal.organizationId)
+      )
+    );
+  } catch (error) {
+    return openAICompatibleErrorResponse(c, error);
+  }
+});
+
+app.get(routePath("retrieveOpenAICompatibleModel"), async (c) => {
+  const authorized = await authenticateOpenAICompatible(
+    c,
+    "retrieveOpenAICompatibleModel",
+    "inference:models:read"
+  );
+  if ("response" in authorized) return authorized.response;
+
+  try {
+    const modelId = c.req.param("model") ?? "";
+    const model = findOpenAICompatibleModel(
+      await listConnectedProviders(authorized.principal.organizationId),
+      modelId
+    );
+    if (!model) {
+      throw new OpenAICompatibleApiError(
+        `The model '${modelId}' does not exist or is not enabled`,
+        "invalid_request_error",
+        "model",
+        "model_not_found",
+        404
+      );
+    }
+
+    return c.json(model);
+  } catch (error) {
+    return openAICompatibleErrorResponse(c, error);
+  }
+});
+
+app.post(routePath("createOpenAICompatibleChatCompletion"), (c) =>
+  forwardOpenAICompatibleRequest(
+    c,
+    "chat/completions",
+    "createOpenAICompatibleChatCompletion"
+  )
+);
+
+app.post(routePath("createOpenAICompatibleResponse"), (c) =>
+  forwardOpenAICompatibleRequest(
+    c,
+    "responses",
+    "createOpenAICompatibleResponse"
+  )
+);
+
+app.post(routePath("createOpenAICompatibleEmbedding"), (c) =>
+  forwardOpenAICompatibleRequest(
+    c,
+    "embeddings",
+    "createOpenAICompatibleEmbedding"
+  )
+);
 
 app.get(routePath("listProjects"), async (c) => {
   const authorized = await authenticateAuthorized(c, "listProjects");
@@ -1903,6 +2031,205 @@ async function authenticateAuthorized(c: Context, action: AuthzAction) {
       response: handleAuthError(c, error, "Not authorized")
     };
   }
+}
+
+async function authenticateOpenAICompatible(
+  c: Context,
+  action: AuthzAction,
+  scope: "inference:models:read" | "inference:invoke"
+) {
+  const bearer = bearerToken(c.req.raw);
+  if (!bearer) {
+    return {
+      response: openAICompatibleErrorResponse(
+        c,
+        new OpenAICompatibleApiError(
+          "Missing or invalid bearer token",
+          "invalid_request_error",
+          null,
+          "invalid_api_key",
+          401
+        )
+      )
+    };
+  }
+
+  if (bearer.startsWith("sk_")) {
+    const principal = await resolveApiToken(bearer);
+    if (!principal) {
+      return {
+        response: openAICompatibleErrorResponse(
+          c,
+          new OpenAICompatibleApiError(
+            "Missing or invalid bearer token",
+            "invalid_request_error",
+            null,
+            "invalid_api_key",
+            401
+          )
+        )
+      };
+    }
+    if (!apiTokenHasScope(principal, scope)) {
+      return {
+        response: openAICompatibleErrorResponse(
+          c,
+          new OpenAICompatibleApiError(
+            `API token requires the '${scope}' scope`,
+            "invalid_request_error",
+            null,
+            "insufficient_scope",
+            403
+          )
+        )
+      };
+    }
+    return { principal };
+  }
+
+  const auth = await resolveAccessPrincipal(bearer);
+  if (!auth) {
+    return {
+      response: openAICompatibleErrorResponse(
+        c,
+        new OpenAICompatibleApiError(
+          "Missing or invalid bearer token",
+          "invalid_request_error",
+          null,
+          "invalid_api_key",
+          401
+        )
+      )
+    };
+  }
+
+  try {
+    authorizePrincipal(auth.principal, action);
+  } catch (error) {
+    if (error instanceof AuthError) {
+      return {
+        response: openAICompatibleErrorResponse(
+          c,
+          new OpenAICompatibleApiError(
+            error.message,
+            "invalid_request_error",
+            null,
+            error.code,
+            error.status
+          )
+        )
+      };
+    }
+    throw error;
+  }
+
+  const principal = organizationPrincipal(auth.principal);
+  if (!principal) {
+    return {
+      response: openAICompatibleErrorResponse(
+        c,
+        new OpenAICompatibleApiError(
+          "An active organization is required",
+          "invalid_request_error",
+          null,
+          "organization_required",
+          403
+        )
+      )
+    };
+  }
+
+  return { principal };
+}
+
+async function forwardOpenAICompatibleRequest(
+  c: Context,
+  endpoint: OpenAICompatibleEndpoint,
+  action: AuthzAction
+) {
+  const authorized = await authenticateOpenAICompatible(
+    c,
+    action,
+    "inference:invoke"
+  );
+  if ("response" in authorized) return authorized.response;
+
+  try {
+    const request = parseOpenAICompatibleRequest(
+      await c.req.json().catch(() => undefined)
+    );
+    const connectedModel = await resolveConnectedModel(
+      authorized.principal.organizationId,
+      request.model
+    );
+    if (!connectedModel) {
+      throw new OpenAICompatibleApiError(
+        `The model '${request.model}' does not exist or is not enabled`,
+        "invalid_request_error",
+        "model",
+        "model_not_found",
+        404
+      );
+    }
+
+    return await proxyOpenAICompatibleRequest({
+      endpoint,
+      request,
+      connectedModel,
+      signal: c.req.raw.signal
+    });
+  } catch (error) {
+    return openAICompatibleErrorResponse(c, error);
+  }
+}
+
+function openAICompatibleErrorResponse(c: Context, error: unknown) {
+  if (error instanceof OpenAICompatibleApiError) {
+    if (error.cause) {
+      logger.warn(
+        { err: error.cause, inferenceError: error.code },
+        "OpenAI-compatible inference request failed"
+      );
+    }
+    return c.json(
+      {
+        error: {
+          message: error.message,
+          type: error.type,
+          param: error.param,
+          code: error.code
+        }
+      },
+      contentfulStatus(error.status)
+    );
+  }
+
+  if (error instanceof InferenceError) {
+    return c.json(
+      {
+        error: {
+          message: error.message,
+          type: error.status >= 500 ? "api_error" : "invalid_request_error",
+          param: null,
+          code: error.code
+        }
+      },
+      contentfulStatus(error.status)
+    );
+  }
+
+  logger.error({ err: error }, "OpenAI-compatible inference request failed");
+  return c.json(
+    {
+      error: {
+        message: "The inference request failed",
+        type: "api_error",
+        param: null,
+        code: "inference_failed"
+      }
+    },
+    500
+  );
 }
 
 function organizationPrincipal(
