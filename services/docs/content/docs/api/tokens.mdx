@@ -1,0 +1,26 @@
+---
+title: API tokens
+description: Organization API credentials and scoped access.
+---
+
+import spec from "../../../generated/openapi/tokens.json";
+import { OpenApiRouteGroup } from "../../../components/openapi-route-group";
+
+API tokens are top-level organization credentials. Each token grants only its
+recorded scopes and can be expired or revoked independently. Creation returns
+the bearer secret once; subsequent reads expose only its non-secret prefix.
+
+Scopes use canonical resource verbs:
+
+- `organization:read` and `organization:write`
+- `inference:read`, `inference:write`, and `inference:invoke`
+- `agents:read` and `agents:write`
+- `sessions:read` and `sessions:write`
+- `tools:read` and `tools:write`
+
+Tokens begin with no selected scopes, and creation requires at least one.
+Account/session lifecycle and token-management routes require an interactive
+access JWT. For user-owned resources, a token acts as its creating admin and is
+invalidated if that user leaves the organization.
+
+<OpenApiRouteGroup spec={spec} />

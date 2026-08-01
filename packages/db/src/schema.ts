@@ -149,6 +149,33 @@ export type AuthActionTokensTable = {
   createdAt: Timestamp;
 };
 
+export type ApiTokenScope =
+  | "organization:read"
+  | "organization:write"
+  | "inference:read"
+  | "inference:write"
+  | "inference:invoke"
+  | "agents:read"
+  | "agents:write"
+  | "sessions:read"
+  | "sessions:write"
+  | "tools:read"
+  | "tools:write";
+
+export type ApiTokensTable = {
+  id: Generated<string>;
+  organizationId: string;
+  name: string;
+  tokenPrefix: string;
+  tokenHash: string;
+  scopes: ApiTokenScope[];
+  createdByUserId: string | null;
+  expiresAt: Timestamp | null;
+  lastUsedAt: Timestamp | null;
+  revokedAt: Timestamp | null;
+  createdAt: Timestamp;
+};
+
 export type SessionsTable = {
   id: Generated<string>;
   userId: string;
@@ -591,6 +618,7 @@ export type Database = {
   authIdentities: AuthIdentitiesTable;
   passwordCredentials: PasswordCredentialsTable;
   authActionTokens: AuthActionTokensTable;
+  apiTokens: ApiTokensTable;
   sessions: SessionsTable;
   auditEvents: AuditEventsTable;
   inferenceProviders: InferenceProvidersTable;

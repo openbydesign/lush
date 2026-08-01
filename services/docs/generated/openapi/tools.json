@@ -1,7 +1,7 @@
 {
   "openapi": "3.1.0",
   "info": {
-    "title": "Health API",
+    "title": "Tools API",
     "version": "0.0.0",
     "description": "HTTP API for authentication, organization-scoped inference configuration, and agent runtime requests."
   },
@@ -12,65 +12,641 @@
   ],
   "tags": [
     {
-      "name": "health",
-      "description": "Health and route discovery routes."
+      "name": "tools",
+      "description": "Tool gateway configuration, discovery, invocation, and approval routes."
     }
   ],
   "paths": {
-    "/v1beta/health": {
+    "/v1beta/tools/settings": {
       "get": {
-        "summary": "Health check",
-        "operationId": "health",
+        "summary": "get tool gateway settings",
+        "operationId": "getToolGatewaySettings",
         "tags": [
-          "health"
+          "tools"
         ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-lush-api-token-scope": "tools:read",
         "responses": {
           "200": {
-            "description": "Service health and route list.",
+            "description": "Successful response.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
                   "additionalProperties": false,
                   "properties": {
-                    "ok": {
-                      "type": "boolean"
-                    },
-                    "service": {
+                    "error": {
                       "type": "string"
-                    },
-                    "agent": {
-                      "type": "string"
-                    },
-                    "routes": {
-                      "type": "array",
-                      "items": {
-                        "type": "object",
-                        "additionalProperties": false,
-                        "properties": {
-                          "id": {
-                            "type": "string"
-                          },
-                          "method": {
-                            "type": "string"
-                          },
-                          "path": {
-                            "type": "string"
-                          }
-                        },
-                        "required": [
-                          "id",
-                          "method",
-                          "path"
-                        ]
-                      }
                     }
                   },
                   "required": [
-                    "ok",
-                    "service",
-                    "agent",
-                    "routes"
+                    "error"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "update tool gateway settings",
+        "operationId": "updateToolGatewaySettings",
+        "tags": [
+          "tools"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-lush-api-token-scope": "tools:write",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful response.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1beta/tools/connections": {
+      "get": {
+        "summary": "list tool connections",
+        "operationId": "listToolConnections",
+        "tags": [
+          "tools"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-lush-api-token-scope": "tools:read",
+        "responses": {
+          "200": {
+            "description": "Successful response.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "create tool connection",
+        "operationId": "createToolConnection",
+        "tags": [
+          "tools"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-lush-api-token-scope": "tools:write",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful response.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1beta/tools/connections/update": {
+      "post": {
+        "summary": "update tool connection",
+        "operationId": "updateToolConnection",
+        "tags": [
+          "tools"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-lush-api-token-scope": "tools:write",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful response.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1beta/tools/connections/delete": {
+      "post": {
+        "summary": "delete tool connection",
+        "operationId": "deleteToolConnection",
+        "tags": [
+          "tools"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-lush-api-token-scope": "tools:write",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful response.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1beta/tools/connections/{connectionId}/definitions": {
+      "get": {
+        "summary": "list tool definitions",
+        "operationId": "listToolDefinitions",
+        "tags": [
+          "tools"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-lush-api-token-scope": "tools:read",
+        "parameters": [
+          {
+            "name": "connectionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1beta/tools/definitions/update": {
+      "post": {
+        "summary": "update tool definition",
+        "operationId": "updateToolDefinition",
+        "tags": [
+          "tools"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-lush-api-token-scope": "tools:write",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful response.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1beta/tools/connections/{connectionId}/discover": {
+      "post": {
+        "summary": "discover tool catalog",
+        "operationId": "discoverToolCatalog",
+        "tags": [
+          "tools"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-lush-api-token-scope": "tools:write",
+        "parameters": [
+          {
+            "name": "connectionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1beta/tools/connections/{connectionId}/catalog/acknowledge": {
+      "post": {
+        "summary": "acknowledge tool catalog",
+        "operationId": "acknowledgeToolCatalog",
+        "tags": [
+          "tools"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-lush-api-token-scope": "tools:write",
+        "parameters": [
+          {
+            "name": "connectionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful response.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1beta/tools/connections/{connectionId}/invoke": {
+      "post": {
+        "summary": "invoke tool",
+        "operationId": "invokeTool",
+        "tags": [
+          "tools"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-lush-api-token-scope": "tools:write",
+        "parameters": [
+          {
+            "name": "connectionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful response.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1beta/tools/approvals/{approvalId}": {
+      "post": {
+        "summary": "decide tool approval",
+        "operationId": "decideToolApproval",
+        "tags": [
+          "tools"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-lush-api-token-scope": "tools:write",
+        "parameters": [
+          {
+            "name": "approvalId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful response.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
                   ]
                 }
               }

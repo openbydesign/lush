@@ -36,8 +36,27 @@ test("database migration ids match their ordinal prefix", () => {
     "018_builtin_tool_enablement",
     "019_retire_current_time_tool",
     "020_tool_call_definition_digest",
-    "021_tool_definition_timeout"
+    "021_tool_definition_timeout",
+    "022_api_tokens",
+    "023_api_token_canonical_scopes"
   ]);
+});
+
+test("canonical API token scopes replace the legacy constraint before rewriting rows", async () => {
+  const migration = await Bun.file(
+    "packages/db/src/migrations/023_api_token_canonical_scopes.ts"
+  ).text();
+  const dropConstraint = migration.indexOf(
+    "drop constraint api_tokens_scopes_supported_check"
+  );
+  const rewriteLegacyScopes = migration.indexOf("set scopes = array_replace");
+  const addConstraint = migration.indexOf(
+    "add constraint api_tokens_scopes_supported_check"
+  );
+
+  expect(dropConstraint).toBeGreaterThan(-1);
+  expect(rewriteLegacyScopes).toBeGreaterThan(dropConstraint);
+  expect(addConstraint).toBeGreaterThan(rewriteLegacyScopes);
 });
 
 test("tool definitions support bounded timeout overrides", async () => {

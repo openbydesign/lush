@@ -30,6 +30,7 @@
             "bearerAuth": []
           }
         ],
+        "x-lush-api-token-scope": "agents:write",
         "parameters": [
           {
             "name": "agentSlug",
@@ -99,6 +100,7 @@
             "bearerAuth": []
           }
         ],
+        "x-lush-api-token-scope": "agents:write",
         "parameters": [
           {
             "name": "agentSlug",
@@ -161,7 +163,7 @@
       "bearerAuth": {
         "type": "http",
         "scheme": "bearer",
-        "bearerFormat": "JWT"
+        "bearerFormat": "JWT or sk_* API token"
       }
     },
     "schemas": {
@@ -987,6 +989,200 @@
           "session"
         ]
       },
+      "ApiTokenScope": {
+        "type": "string",
+        "enum": [
+          "organization:read",
+          "organization:write",
+          "inference:read",
+          "inference:write",
+          "inference:invoke",
+          "agents:read",
+          "agents:write",
+          "sessions:read",
+          "sessions:write",
+          "tools:read",
+          "tools:write"
+        ],
+        "description": "Capability granted to an API token."
+      },
+      "ApiToken": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Organization-scoped API token metadata. The secret is never returned here.",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "API token identifier."
+          },
+          "organizationId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Organization that owns the token."
+          },
+          "name": {
+            "type": "string",
+            "description": "Human-readable token name."
+          },
+          "prefix": {
+            "type": "string",
+            "description": "Non-secret token prefix shown for identification."
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ApiTokenScope"
+            },
+            "description": "Capabilities granted to the token."
+          },
+          "createdByUserId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "User that created the token, or null if that user was deleted."
+          },
+          "expiresAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Expiration timestamp, or null for no expiration."
+          },
+          "lastUsedAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Most recent observed use, coalesced to reduce write load."
+          },
+          "revokedAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Revocation timestamp, or null while active."
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Creation timestamp."
+          }
+        },
+        "required": [
+          "id",
+          "organizationId",
+          "name",
+          "prefix",
+          "scopes",
+          "createdByUserId",
+          "expiresAt",
+          "lastUsedAt",
+          "revokedAt",
+          "createdAt"
+        ]
+      },
+      "ListApiTokensResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "API tokens visible to an organization admin.",
+        "properties": {
+          "tokens": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ApiToken"
+            },
+            "description": "Active and expired organization API tokens. Revoked tokens are omitted."
+          }
+        },
+        "required": [
+          "tokens"
+        ]
+      },
+      "CreateApiTokenRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Creates an organization API token.",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100,
+            "description": "Human-readable token name."
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ApiTokenScope"
+            },
+            "description": "One or more capabilities to grant."
+          },
+          "expiresInDays": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 365,
+            "description": "Optional expiration between 1 and 365 days. Omit for no expiration."
+          }
+        },
+        "required": [
+          "name",
+          "scopes"
+        ]
+      },
+      "CreateApiTokenResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Created API token and its one-time secret.",
+        "properties": {
+          "token": {
+            "$ref": "#/components/schemas/ApiToken",
+            "description": "Created token metadata."
+          },
+          "secret": {
+            "type": "string",
+            "description": "Bearer secret returned exactly once."
+          }
+        },
+        "required": [
+          "token",
+          "secret"
+        ]
+      },
+      "RevokeApiTokenResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Revoked API token.",
+        "properties": {
+          "token": {
+            "$ref": "#/components/schemas/ApiToken",
+            "description": "Revoked token metadata."
+          }
+        },
+        "required": [
+          "token"
+        ]
+      },
       "RegisterAccountResponse": {
         "$ref": "#/components/schemas/EmailVerificationRequired",
         "description": "Response returned after account registration."
@@ -1321,6 +1517,125 @@
         "required": [
           "mode",
           "modelSelection"
+        ]
+      },
+      "OpenAICompatibleModel": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "OpenAI-compatible model object.",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Organization-scoped model identifier accepted by the compatibility endpoints."
+          },
+          "object": {
+            "type": "string",
+            "const": "model",
+            "description": "OpenAI model object discriminator."
+          },
+          "created": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Creation timestamp. Lush returns zero because provider discovery does not expose this value consistently."
+          },
+          "owned_by": {
+            "type": "string",
+            "description": "Configured provider label."
+          }
+        },
+        "required": [
+          "id",
+          "object",
+          "created",
+          "owned_by"
+        ]
+      },
+      "OpenAICompatibleModelList": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "OpenAI-compatible model list.",
+        "properties": {
+          "object": {
+            "type": "string",
+            "const": "list",
+            "description": "OpenAI list discriminator."
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OpenAICompatibleModel"
+            },
+            "description": "Enabled models for the active organization."
+          }
+        },
+        "required": [
+          "object",
+          "data"
+        ]
+      },
+      "OpenAICompatibleRequest": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": [
+          "model"
+        ],
+        "properties": {
+          "model": {
+            "type": "string",
+            "description": "Organization-scoped model identifier returned by the models endpoint."
+          }
+        },
+        "description": "OpenAI-compatible request. Endpoint-specific fields are passed through to the selected provider."
+      },
+      "OpenAICompatibleResponse": {
+        "type": "object",
+        "additionalProperties": true,
+        "description": "OpenAI-compatible provider response."
+      },
+      "OpenAICompatibleError": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "OpenAI-compatible error response.",
+        "properties": {
+          "error": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "message": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "invalid_request_error",
+                  "api_error"
+                ]
+              },
+              "param": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "code": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "message",
+              "type",
+              "param",
+              "code"
+            ],
+            "description": "OpenAI-compatible error payload."
+          }
+        },
+        "required": [
+          "error"
         ]
       },
       "SessionSummary": {

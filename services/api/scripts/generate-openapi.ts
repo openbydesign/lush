@@ -1,5 +1,6 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
+import { canonicalApiTokenActionScopes } from "@lush/authz/api-token-scopes";
 import { apiSpec } from "../src/spec";
 
 type JsonSchema = Record<string, unknown>;
@@ -10,6 +11,7 @@ type Operation = {
   operationId: string;
   tags: string[];
   security?: Array<Record<string, string[]>>;
+  "x-lush-api-token-scope"?: string;
   parameters?: Array<{
     name: string;
     in: "path" | "query";
@@ -40,6 +42,9 @@ type Operation = {
         "application/x-ndjson"?: {
           schema: JsonSchema;
         };
+        "text/event-stream"?: {
+          schema: JsonSchema;
+        };
       };
     }
   >;
@@ -60,7 +65,7 @@ type OpenApiDocument = {
       bearerAuth: {
         type: "http";
         scheme: "bearer";
-        bearerFormat: "JWT";
+        bearerFormat: string;
       };
     };
     schemas: Record<string, JsonSchema>;
@@ -296,6 +301,49 @@ const schemas: Record<string, JsonSchema> = {
     accessTokenExpiresAt: describeSchema(stringSchema("date-time"), "Access-token expiration timestamp."),
     session: describeSchema(ref("CurrentSession"), "Current authenticated session profile.")
   }, ["accessToken", "accessTokenExpiresAt", "session"], "Login or refresh response containing an access token and session profile."),
+  ApiTokenScope: describeSchema(
+    enumSchema([
+      "organization:read",
+      "organization:write",
+      "inference:read",
+      "inference:write",
+      "inference:invoke",
+      "agents:read",
+      "agents:write",
+      "sessions:read",
+      "sessions:write",
+      "tools:read",
+      "tools:write"
+    ]),
+    "Capability granted to an API token."
+  ),
+  ApiToken: objectSchema({
+    id: describeSchema(stringSchema("uuid"), "API token identifier."),
+    organizationId: describeSchema(stringSchema("uuid"), "Organization that owns the token."),
+    name: describeSchema(stringSchema(), "Human-readable token name."),
+    prefix: describeSchema(stringSchema(), "Non-secret token prefix shown for identification."),
+    scopes: describeSchema(arraySchema(ref("ApiTokenScope")), "Capabilities granted to the token."),
+    createdByUserId: describeSchema(nullableSchema(stringSchema("uuid")), "User that created the token, or null if that user was deleted."),
+    expiresAt: describeSchema(nullableSchema(stringSchema("date-time")), "Expiration timestamp, or null for no expiration."),
+    lastUsedAt: describeSchema(nullableSchema(stringSchema("date-time")), "Most recent observed use, coalesced to reduce write load."),
+    revokedAt: describeSchema(nullableSchema(stringSchema("date-time")), "Revocation timestamp, or null while active."),
+    createdAt: describeSchema(stringSchema("date-time"), "Creation timestamp.")
+  }, ["id", "organizationId", "name", "prefix", "scopes", "createdByUserId", "expiresAt", "lastUsedAt", "revokedAt", "createdAt"], "Organization-scoped API token metadata. The secret is never returned here."),
+  ListApiTokensResponse: objectSchema({
+    tokens: describeSchema(arraySchema(ref("ApiToken")), "Active and expired organization API tokens. Revoked tokens are omitted.")
+  }, ["tokens"], "API tokens visible to an organization admin."),
+  CreateApiTokenRequest: objectSchema({
+    name: describeSchema(stringSchema(undefined, 1, 100), "Human-readable token name."),
+    scopes: describeSchema(arraySchema(ref("ApiTokenScope")), "One or more capabilities to grant."),
+    expiresInDays: describeSchema({ type: "integer", minimum: 1, maximum: 365 }, "Optional expiration between 1 and 365 days. Omit for no expiration.")
+  }, ["name", "scopes"], "Creates an organization API token."),
+  CreateApiTokenResponse: objectSchema({
+    token: describeSchema(ref("ApiToken"), "Created token metadata."),
+    secret: describeSchema(stringSchema(), "Bearer secret returned exactly once.")
+  }, ["token", "secret"], "Created API token and its one-time secret."),
+  RevokeApiTokenResponse: objectSchema({
+    token: describeSchema(ref("ApiToken"), "Revoked token metadata.")
+  }, ["token"], "Revoked API token."),
   RegisterAccountResponse: describeSchema(
     ref("EmailVerificationRequired"),
     "Response returned after account registration."
@@ -407,6 +455,38 @@ const schemas: Record<string, JsonSchema> = {
       "Model selection in provider/model form as returned by inference configuration."
     )
   }, ["mode", "modelSelection"], "Updates the default model selection for a workspace mode."),
+  OpenAICompatibleModel: objectSchema({
+    id: describeSchema(stringSchema(), "Organization-scoped model identifier accepted by the compatibility endpoints."),
+    object: describeSchema({ type: "string", const: "model" }, "OpenAI model object discriminator."),
+    created: describeSchema({ type: "integer", minimum: 0 }, "Creation timestamp. Lush returns zero because provider discovery does not expose this value consistently."),
+    owned_by: describeSchema(stringSchema(), "Configured provider label.")
+  }, ["id", "object", "created", "owned_by"], "OpenAI-compatible model object."),
+  OpenAICompatibleModelList: objectSchema({
+    object: describeSchema({ type: "string", const: "list" }, "OpenAI list discriminator."),
+    data: describeSchema(arraySchema(ref("OpenAICompatibleModel")), "Enabled models for the active organization.")
+  }, ["object", "data"], "OpenAI-compatible model list."),
+  OpenAICompatibleRequest: {
+    type: "object",
+    additionalProperties: true,
+    required: ["model"],
+    properties: {
+      model: describeSchema(stringSchema(), "Organization-scoped model identifier returned by the models endpoint.")
+    },
+    description: "OpenAI-compatible request. Endpoint-specific fields are passed through to the selected provider."
+  },
+  OpenAICompatibleResponse: {
+    type: "object",
+    additionalProperties: true,
+    description: "OpenAI-compatible provider response."
+  },
+  OpenAICompatibleError: objectSchema({
+    error: describeSchema(objectSchema({
+      message: stringSchema(),
+      type: enumSchema(["invalid_request_error", "api_error"]),
+      param: nullableSchema(stringSchema()),
+      code: stringSchema()
+    }, ["message", "type", "param", "code"]), "OpenAI-compatible error payload.")
+  }, ["error"], "OpenAI-compatible error response."),
   SessionSummary: objectSchema({
     id: describeSchema(stringSchema("uuid"), "Session identifier."),
     organizationId: describeSchema(stringSchema("uuid"), "Organization that owns the session."),
@@ -713,6 +793,23 @@ const operationDocs: Record<
     requestDescription: "Invitation token and accepted or declined response.",
     successDescription: "Updated invitation and inviting organization."
   },
+  listApiTokens: {
+    summary: "List API tokens",
+    description: "Lists active, expired, and revoked API tokens for the current organization. Requires an organization admin.",
+    successDescription: "Organization API token list."
+  },
+  createApiToken: {
+    summary: "Create API token",
+    description: "Creates an organization-scoped bearer credential with explicit scopes. The secret is returned only in this response. Requires an organization admin.",
+    requestDescription: "Token name, scopes, and optional expiration.",
+    successDescription: "Created token metadata and one-time secret."
+  },
+  revokeApiToken: {
+    summary: "Revoke API token",
+    description: "Immediately revokes an organization API token. Requires an organization admin.",
+    requestDescription: "Empty JSON object.",
+    successDescription: "Revoked API token."
+  },
   fetchInferenceConfig: {
     summary: "Get inference configuration",
     description:
@@ -760,6 +857,37 @@ const operationDocs: Record<
       "Sets the default provider/model selection for one workspace mode in the active organization.",
     requestDescription: "Workspace mode and model selection.",
     successDescription: "Updated inference configuration."
+  },
+  listOpenAICompatibleModels: {
+    summary: "List routed models",
+    description:
+      "Lists enabled organization models using OpenAI-compatible model objects. Use each returned id as the model field on the compatibility endpoints.",
+    successDescription: "Enabled organization model list."
+  },
+  retrieveOpenAICompatibleModel: {
+    summary: "Retrieve routed model",
+    description: "Retrieves one enabled organization model by its routed model id.",
+    successDescription: "Enabled organization model."
+  },
+  createOpenAICompatibleChatCompletion: {
+    summary: "Create chat completion",
+    description:
+      "Routes an OpenAI Chat Completions request through the selected organization provider. JSON and server-sent event responses are passed through.",
+    requestDescription: "OpenAI Chat Completions request using a routed model id.",
+    successDescription: "OpenAI-compatible chat completion or event stream."
+  },
+  createOpenAICompatibleResponse: {
+    summary: "Create response",
+    description:
+      "Routes an OpenAI Responses request through the selected organization provider. JSON and server-sent event responses are passed through.",
+    requestDescription: "OpenAI Responses request using a routed model id.",
+    successDescription: "OpenAI-compatible response or event stream."
+  },
+  createOpenAICompatibleEmbedding: {
+    summary: "Create embeddings",
+    description: "Routes an OpenAI Embeddings request through the selected organization provider.",
+    requestDescription: "OpenAI Embeddings request using a routed model id.",
+    successDescription: "OpenAI-compatible embedding response."
   },
   listProjects: {
     summary: "List projects",
@@ -912,13 +1040,15 @@ const operationDocs: Record<
 
 const pathParameterDescriptions: Record<string, string> = {
   agentSlug: "Unique agent slug, such as `lush` for the built-in agent.",
+  model: "Organization-scoped routed model identifier.",
+  tokenId: "API token identifier.",
   sessionId: "Session identifier.",
   runId: "Agent run identifier."
 };
 
 const fullDocument = createOpenApiDocument("Lush API", apiSpec.routes);
 const groupedDocuments = Object.fromEntries(
-  ["auth", "inference", "sessions", "runs", "agents", "health"].map((group) => [
+  ["auth", "tokens", "inference", "sessions", "runs", "agents", "tools", "health"].map((group) => [
     group,
     createOpenApiDocument(
       `${titleCase(group)} API`,
@@ -964,7 +1094,7 @@ function createOpenApiDocument(
         bearerAuth: {
           type: "http",
           scheme: "bearer",
-          bearerFormat: "JWT"
+          bearerFormat: "JWT or sk_* API token"
         }
       },
       schemas
@@ -973,6 +1103,9 @@ function createOpenApiDocument(
 
   for (const route of routes) {
     const docs = operationDocs[route.id];
+    const apiTokenScope = canonicalApiTokenActionScopes[
+      route.id as keyof typeof canonicalApiTokenActionScopes
+    ];
     const path = openApiPath(route.path);
     document.paths[path] ??= {};
     document.paths[path][route.method.toLowerCase()] = {
@@ -981,6 +1114,9 @@ function createOpenApiDocument(
       operationId: route.id,
       tags: [forcedTag ?? routeGroup(route.path)],
       ...(route.auth ? { security: [{ bearerAuth: [] }] } : {}),
+      ...(apiTokenScope
+        ? { "x-lush-api-token-scope": apiTokenScope }
+        : {}),
       ...operationParameters(route.path, route.id),
       ...requestBody(route),
       responses: responses(route)
@@ -1086,6 +1222,21 @@ function operationParameters(path: string, routeId: string) {
 function responses(route: (typeof apiSpec.routes)[number]): Operation["responses"] {
   const docs = operationDocs[route.id];
   if (route.kind === "stream") {
+    if (route.id.startsWith("createOpenAICompatible")) {
+      return {
+        "200": {
+          description: docs?.successDescription ?? "OpenAI-compatible response.",
+          content: {
+            "application/json": { schema: schemaFor(route.responseType) },
+            "text/event-stream": { schema: stringSchema() }
+          }
+        },
+        "400": openAICompatibleErrorDocument(),
+        "401": openAICompatibleErrorDocument(),
+        "404": openAICompatibleErrorDocument(),
+        "502": openAICompatibleErrorDocument()
+      };
+    }
     return {
       "200": {
         description: docs?.successDescription ?? "Typed agent event stream.",
@@ -1127,7 +1278,27 @@ function responses(route: (typeof apiSpec.routes)[number]): Operation["responses
         }
       }
     },
-    ...(route.auth ? { "401": unauthorizedResponse() } : {})
+    ...(route.id.includes("OpenAICompatible")
+      ? {
+          "400": openAICompatibleErrorDocument(),
+          "401": openAICompatibleErrorDocument(),
+          "404": openAICompatibleErrorDocument(),
+          "502": openAICompatibleErrorDocument()
+        }
+      : route.auth
+        ? { "401": unauthorizedResponse() }
+        : {})
+  };
+}
+
+function openAICompatibleErrorDocument() {
+  return {
+    description: "OpenAI-compatible error response.",
+    content: {
+      "application/json": {
+        schema: ref("OpenAICompatibleError")
+      }
+    }
   };
 }
 
@@ -1259,8 +1430,10 @@ function tagDescription(tag: string) {
     session: "Current-session inspection routes.",
     settings: "Organization-level settings routes.",
     sessions: "Sessions, messages, state snapshots, and session-state settings routes.",
-    inference: "Organization-scoped inference provider and model-default configuration routes.",
+    inference: "Organization-scoped inference configuration and OpenAI-compatible model-routing routes.",
+    tokens: "Organization API credential lifecycle and scope management routes.",
     agents: "Agent runtime invocation routes.",
+    tools: "Tool gateway configuration, discovery, invocation, and approval routes.",
     health: "Service health and route discovery routes."
   };
 

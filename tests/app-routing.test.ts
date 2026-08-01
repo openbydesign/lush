@@ -30,6 +30,15 @@ test("tool settings separate personal access from organization governance", () =
   ]);
 });
 
+test("API tokens are a top-level organization setting", () => {
+  expect(
+    settingsRoutes.find((route) => route.href === "/settings/api-tokens")
+  ).toMatchObject({
+    label: "API tokens",
+    eyebrow: "Organization settings"
+  });
+});
+
 test("project chat navigation carries its project and initial prompt", () => {
   const state = createProjectChatState("project-1", "  Draft a launch plan  ");
 

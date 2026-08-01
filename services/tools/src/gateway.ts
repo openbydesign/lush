@@ -812,7 +812,8 @@ async function audit(
           connectionId: connection.id,
           toolDefinitionId: definition.id,
           tool: definition.externalName,
-          errorCode: errorCode ?? null
+          errorCode: errorCode ?? null,
+          ...(principal.tokenId ? { apiTokenId: principal.tokenId } : {})
         },
         createdAt: new Date()
       })

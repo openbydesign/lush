@@ -29,6 +29,9 @@ test("public API routes are grouped under v1beta", () => {
       (route) => route.path === "/v1beta/agents/:agentSlug/chat"
     )
   ).toBe(true);
+  expect(
+    apiSpec.routes.some((route) => route.path === "/v1beta/tokens")
+  ).toBe(true);
 });
 
 test("browser clients can read the durable run identifier", async () => {

@@ -173,6 +173,47 @@ export type AccessSession = {
   session: CurrentSession;
 };
 
+export type ApiTokenScope =
+  | "organization:read"
+  | "organization:write"
+  | "inference:read"
+  | "inference:write"
+  | "inference:invoke"
+  | "agents:read"
+  | "agents:write"
+  | "sessions:read"
+  | "sessions:write"
+  | "tools:read"
+  | "tools:write";
+
+export type ApiToken = {
+  id: string;
+  organizationId: string;
+  name: string;
+  prefix: string;
+  scopes: ApiTokenScope[];
+  createdByUserId: string | null;
+  expiresAt: string | null;
+  lastUsedAt: string | null;
+  revokedAt: string | null;
+  createdAt: string;
+};
+
+export type ListApiTokensResponse = { tokens: ApiToken[] };
+
+export type CreateApiTokenRequest = {
+  name: string;
+  scopes: ApiTokenScope[];
+  expiresInDays?: number;
+};
+
+export type CreateApiTokenResponse = {
+  token: ApiToken;
+  secret: string;
+};
+
+export type RevokeApiTokenResponse = { token: ApiToken };
+
 export type RegisterAccountResponse = EmailVerificationRequired;
 `;
 
@@ -367,6 +408,32 @@ export const authzRoutes = [
     path: "/session/organization/invites/respond",
     requestType: "RespondToOrganizationInviteRequest",
     responseType: "RespondToOrganizationInviteResponse",
+    auth: true,
+    kind: "json"
+  },
+  {
+    id: "listApiTokens",
+    method: "GET",
+    path: "/tokens",
+    responseType: "ListApiTokensResponse",
+    auth: true,
+    kind: "json"
+  },
+  {
+    id: "createApiToken",
+    method: "POST",
+    path: "/tokens",
+    requestType: "CreateApiTokenRequest",
+    responseType: "CreateApiTokenResponse",
+    auth: true,
+    kind: "json"
+  },
+  {
+    id: "revokeApiToken",
+    method: "POST",
+    path: "/tokens/:tokenId/revoke",
+    requestType: "Record<string, never>",
+    responseType: "RevokeApiTokenResponse",
     auth: true,
     kind: "json"
   }

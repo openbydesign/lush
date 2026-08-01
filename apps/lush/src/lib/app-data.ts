@@ -187,6 +187,13 @@ export const settingsRoutes: Route[] = [
     body: ""
   },
   {
+    href: "/settings/api-tokens",
+    label: "API tokens",
+    eyebrow: "Organization settings",
+    title: "API tokens",
+    body: ""
+  },
+  {
     href: "/settings/tool-gateway",
     label: "Tool gateway",
     eyebrow: "Organization settings",

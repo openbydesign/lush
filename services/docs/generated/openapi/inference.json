@@ -13,7 +13,7 @@
   "tags": [
     {
       "name": "inference",
-      "description": "Organization-scoped inference provider and model-default configuration routes."
+      "description": "Organization-scoped inference configuration and OpenAI-compatible model-routing routes."
     }
   ],
   "paths": {
@@ -30,6 +30,7 @@
             "bearerAuth": []
           }
         ],
+        "x-lush-api-token-scope": "inference:read",
         "responses": {
           "200": {
             "description": "Complete inference configuration for the active organization.",
@@ -76,6 +77,7 @@
             "bearerAuth": []
           }
         ],
+        "x-lush-api-token-scope": "inference:write",
         "requestBody": {
           "required": true,
           "description": "Provider kind, label, API key, and optional base URL override.",
@@ -133,6 +135,7 @@
             "bearerAuth": []
           }
         ],
+        "x-lush-api-token-scope": "inference:write",
         "requestBody": {
           "required": true,
           "description": "Provider identifier and enabled state.",
@@ -190,6 +193,7 @@
             "bearerAuth": []
           }
         ],
+        "x-lush-api-token-scope": "inference:write",
         "requestBody": {
           "required": true,
           "description": "Provider identifier.",
@@ -247,6 +251,7 @@
             "bearerAuth": []
           }
         ],
+        "x-lush-api-token-scope": "inference:write",
         "requestBody": {
           "required": true,
           "description": "Provider identifier, model identifier, and enabled state.",
@@ -304,6 +309,7 @@
             "bearerAuth": []
           }
         ],
+        "x-lush-api-token-scope": "inference:write",
         "requestBody": {
           "required": true,
           "description": "Provider identifier.",
@@ -361,6 +367,7 @@
             "bearerAuth": []
           }
         ],
+        "x-lush-api-token-scope": "inference:write",
         "requestBody": {
           "required": true,
           "description": "Workspace mode and model selection.",
@@ -404,6 +411,400 @@
           }
         }
       }
+    },
+    "/v1beta/inference/v1/models": {
+      "get": {
+        "summary": "List routed models",
+        "description": "Lists enabled organization models using OpenAI-compatible model objects. Use each returned id as the model field on the compatibility endpoints.",
+        "operationId": "listOpenAICompatibleModels",
+        "tags": [
+          "inference"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-lush-api-token-scope": "inference:read",
+        "responses": {
+          "200": {
+            "description": "Enabled organization model list.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAICompatibleModelList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "OpenAI-compatible error response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAICompatibleError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "OpenAI-compatible error response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAICompatibleError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "OpenAI-compatible error response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAICompatibleError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "OpenAI-compatible error response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAICompatibleError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1beta/inference/v1/models/{model}": {
+      "get": {
+        "summary": "Retrieve routed model",
+        "description": "Retrieves one enabled organization model by its routed model id.",
+        "operationId": "retrieveOpenAICompatibleModel",
+        "tags": [
+          "inference"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-lush-api-token-scope": "inference:read",
+        "parameters": [
+          {
+            "name": "model",
+            "in": "path",
+            "required": true,
+            "description": "Organization-scoped routed model identifier.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Enabled organization model.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAICompatibleModel"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "OpenAI-compatible error response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAICompatibleError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "OpenAI-compatible error response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAICompatibleError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "OpenAI-compatible error response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAICompatibleError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "OpenAI-compatible error response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAICompatibleError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1beta/inference/v1/chat/completions": {
+      "post": {
+        "summary": "Create chat completion",
+        "description": "Routes an OpenAI Chat Completions request through the selected organization provider. JSON and server-sent event responses are passed through.",
+        "operationId": "createOpenAICompatibleChatCompletion",
+        "tags": [
+          "inference"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-lush-api-token-scope": "inference:invoke",
+        "requestBody": {
+          "required": true,
+          "description": "OpenAI Chat Completions request using a routed model id.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OpenAICompatibleRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OpenAI-compatible chat completion or event stream.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAICompatibleResponse"
+                }
+              },
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "OpenAI-compatible error response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAICompatibleError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "OpenAI-compatible error response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAICompatibleError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "OpenAI-compatible error response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAICompatibleError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "OpenAI-compatible error response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAICompatibleError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1beta/inference/v1/responses": {
+      "post": {
+        "summary": "Create response",
+        "description": "Routes an OpenAI Responses request through the selected organization provider. JSON and server-sent event responses are passed through.",
+        "operationId": "createOpenAICompatibleResponse",
+        "tags": [
+          "inference"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-lush-api-token-scope": "inference:invoke",
+        "requestBody": {
+          "required": true,
+          "description": "OpenAI Responses request using a routed model id.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OpenAICompatibleRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OpenAI-compatible response or event stream.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAICompatibleResponse"
+                }
+              },
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "OpenAI-compatible error response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAICompatibleError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "OpenAI-compatible error response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAICompatibleError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "OpenAI-compatible error response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAICompatibleError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "OpenAI-compatible error response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAICompatibleError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1beta/inference/v1/embeddings": {
+      "post": {
+        "summary": "Create embeddings",
+        "description": "Routes an OpenAI Embeddings request through the selected organization provider.",
+        "operationId": "createOpenAICompatibleEmbedding",
+        "tags": [
+          "inference"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-lush-api-token-scope": "inference:invoke",
+        "requestBody": {
+          "required": true,
+          "description": "OpenAI Embeddings request using a routed model id.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OpenAICompatibleRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OpenAI-compatible embedding response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAICompatibleResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "OpenAI-compatible error response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAICompatibleError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "OpenAI-compatible error response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAICompatibleError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "OpenAI-compatible error response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAICompatibleError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "OpenAI-compatible error response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAICompatibleError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -411,7 +812,7 @@
       "bearerAuth": {
         "type": "http",
         "scheme": "bearer",
-        "bearerFormat": "JWT"
+        "bearerFormat": "JWT or sk_* API token"
       }
     },
     "schemas": {
@@ -1237,6 +1638,200 @@
           "session"
         ]
       },
+      "ApiTokenScope": {
+        "type": "string",
+        "enum": [
+          "organization:read",
+          "organization:write",
+          "inference:read",
+          "inference:write",
+          "inference:invoke",
+          "agents:read",
+          "agents:write",
+          "sessions:read",
+          "sessions:write",
+          "tools:read",
+          "tools:write"
+        ],
+        "description": "Capability granted to an API token."
+      },
+      "ApiToken": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Organization-scoped API token metadata. The secret is never returned here.",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "API token identifier."
+          },
+          "organizationId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Organization that owns the token."
+          },
+          "name": {
+            "type": "string",
+            "description": "Human-readable token name."
+          },
+          "prefix": {
+            "type": "string",
+            "description": "Non-secret token prefix shown for identification."
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ApiTokenScope"
+            },
+            "description": "Capabilities granted to the token."
+          },
+          "createdByUserId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "User that created the token, or null if that user was deleted."
+          },
+          "expiresAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Expiration timestamp, or null for no expiration."
+          },
+          "lastUsedAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Most recent observed use, coalesced to reduce write load."
+          },
+          "revokedAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Revocation timestamp, or null while active."
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Creation timestamp."
+          }
+        },
+        "required": [
+          "id",
+          "organizationId",
+          "name",
+          "prefix",
+          "scopes",
+          "createdByUserId",
+          "expiresAt",
+          "lastUsedAt",
+          "revokedAt",
+          "createdAt"
+        ]
+      },
+      "ListApiTokensResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "API tokens visible to an organization admin.",
+        "properties": {
+          "tokens": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ApiToken"
+            },
+            "description": "Active and expired organization API tokens. Revoked tokens are omitted."
+          }
+        },
+        "required": [
+          "tokens"
+        ]
+      },
+      "CreateApiTokenRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Creates an organization API token.",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100,
+            "description": "Human-readable token name."
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ApiTokenScope"
+            },
+            "description": "One or more capabilities to grant."
+          },
+          "expiresInDays": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 365,
+            "description": "Optional expiration between 1 and 365 days. Omit for no expiration."
+          }
+        },
+        "required": [
+          "name",
+          "scopes"
+        ]
+      },
+      "CreateApiTokenResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Created API token and its one-time secret.",
+        "properties": {
+          "token": {
+            "$ref": "#/components/schemas/ApiToken",
+            "description": "Created token metadata."
+          },
+          "secret": {
+            "type": "string",
+            "description": "Bearer secret returned exactly once."
+          }
+        },
+        "required": [
+          "token",
+          "secret"
+        ]
+      },
+      "RevokeApiTokenResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Revoked API token.",
+        "properties": {
+          "token": {
+            "$ref": "#/components/schemas/ApiToken",
+            "description": "Revoked token metadata."
+          }
+        },
+        "required": [
+          "token"
+        ]
+      },
       "RegisterAccountResponse": {
         "$ref": "#/components/schemas/EmailVerificationRequired",
         "description": "Response returned after account registration."
@@ -1571,6 +2166,125 @@
         "required": [
           "mode",
           "modelSelection"
+        ]
+      },
+      "OpenAICompatibleModel": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "OpenAI-compatible model object.",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Organization-scoped model identifier accepted by the compatibility endpoints."
+          },
+          "object": {
+            "type": "string",
+            "const": "model",
+            "description": "OpenAI model object discriminator."
+          },
+          "created": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Creation timestamp. Lush returns zero because provider discovery does not expose this value consistently."
+          },
+          "owned_by": {
+            "type": "string",
+            "description": "Configured provider label."
+          }
+        },
+        "required": [
+          "id",
+          "object",
+          "created",
+          "owned_by"
+        ]
+      },
+      "OpenAICompatibleModelList": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "OpenAI-compatible model list.",
+        "properties": {
+          "object": {
+            "type": "string",
+            "const": "list",
+            "description": "OpenAI list discriminator."
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OpenAICompatibleModel"
+            },
+            "description": "Enabled models for the active organization."
+          }
+        },
+        "required": [
+          "object",
+          "data"
+        ]
+      },
+      "OpenAICompatibleRequest": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": [
+          "model"
+        ],
+        "properties": {
+          "model": {
+            "type": "string",
+            "description": "Organization-scoped model identifier returned by the models endpoint."
+          }
+        },
+        "description": "OpenAI-compatible request. Endpoint-specific fields are passed through to the selected provider."
+      },
+      "OpenAICompatibleResponse": {
+        "type": "object",
+        "additionalProperties": true,
+        "description": "OpenAI-compatible provider response."
+      },
+      "OpenAICompatibleError": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "OpenAI-compatible error response.",
+        "properties": {
+          "error": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "message": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "invalid_request_error",
+                  "api_error"
+                ]
+              },
+              "param": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "code": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "message",
+              "type",
+              "param",
+              "code"
+            ],
+            "description": "OpenAI-compatible error payload."
+          }
+        },
+        "required": [
+          "error"
         ]
       },
       "SessionSummary": {

@@ -97,6 +97,25 @@ export type UpdateInferenceModelDefaultRequest = {
   mode: WorkspaceMode;
   modelSelection: string;
 };
+
+export type OpenAICompatibleModel = {
+  id: string;
+  object: "model";
+  created: number;
+  owned_by: string;
+};
+
+export type OpenAICompatibleModelList = {
+  object: "list";
+  data: OpenAICompatibleModel[];
+};
+
+export type OpenAICompatibleRequest = {
+  model: string;
+  [key: string]: unknown;
+};
+
+export type OpenAICompatibleResponse = Record<string, unknown>;
 `;
 
 export const inferenceRoutes = [
@@ -159,6 +178,49 @@ export const inferenceRoutes = [
     path: "/inference/model-defaults/update",
     requestType: "UpdateInferenceModelDefaultRequest",
     responseType: "InferenceConfig",
+    auth: true,
+    kind: "json"
+  },
+  {
+    id: "listOpenAICompatibleModels",
+    method: "GET",
+    path: "/inference/v1/models",
+    responseType: "OpenAICompatibleModelList",
+    auth: true,
+    kind: "json"
+  },
+  {
+    id: "retrieveOpenAICompatibleModel",
+    method: "GET",
+    path: "/inference/v1/models/:model",
+    responseType: "OpenAICompatibleModel",
+    auth: true,
+    kind: "json"
+  },
+  {
+    id: "createOpenAICompatibleChatCompletion",
+    method: "POST",
+    path: "/inference/v1/chat/completions",
+    requestType: "OpenAICompatibleRequest",
+    responseType: "OpenAICompatibleResponse",
+    auth: true,
+    kind: "stream"
+  },
+  {
+    id: "createOpenAICompatibleResponse",
+    method: "POST",
+    path: "/inference/v1/responses",
+    requestType: "OpenAICompatibleRequest",
+    responseType: "OpenAICompatibleResponse",
+    auth: true,
+    kind: "stream"
+  },
+  {
+    id: "createOpenAICompatibleEmbedding",
+    method: "POST",
+    path: "/inference/v1/embeddings",
+    requestType: "OpenAICompatibleRequest",
+    responseType: "OpenAICompatibleResponse",
     auth: true,
     kind: "json"
   }

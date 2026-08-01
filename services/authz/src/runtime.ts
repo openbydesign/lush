@@ -1,4 +1,4 @@
-import { sql, type Kysely, type Transaction } from "kysely";
+import { sql, type Kysely, type Selectable, type Transaction } from "kysely";
 import {
   ConfigError,
   envSchema,
@@ -8,12 +8,18 @@ import {
 } from "@lush/config/env";
 import { getDb } from "@lush/db/client";
 import type {
+  ApiTokenScope,
+  ApiTokensTable,
   AuthActionTokenPurpose,
   Database,
   UserRole
 } from "@lush/db/schema";
 import { createLogger } from "@lush/logging/logger";
 import type { EmailDelivery } from "@lush/notifications/email";
+import {
+  canonicalApiTokenActionScopes,
+  canonicalApiTokenScopes
+} from "./api-token-scopes";
 import {
   createRefreshToken,
   refreshTokenFamilySecret,
@@ -43,8 +49,38 @@ export type Principal = {
   organizationId: string | null;
   membershipId: string | null;
   role: UserRole | null;
-  sessionId: string;
+  sessionId: string | null;
   tokenId?: string;
+};
+
+export const apiTokenScopes =
+  canonicalApiTokenScopes satisfies readonly ApiTokenScope[];
+
+export type ApiTokenPrincipal = Principal & {
+  tokenId: string;
+  organizationId: string;
+  membershipId: string;
+  role: UserRole;
+  sessionId: null;
+  scopes: ApiTokenScope[];
+};
+
+export type ApiToken = {
+  id: string;
+  organizationId: string;
+  name: string;
+  prefix: string;
+  scopes: ApiTokenScope[];
+  createdByUserId: string | null;
+  expiresAt: string | null;
+  lastUsedAt: string | null;
+  revokedAt: string | null;
+  createdAt: string;
+};
+
+export type ApiTokenRuntimeOptions = {
+  db?: Kysely<Database>;
+  now?: Date;
 };
 
 export type RequestMeta = {
@@ -282,6 +318,9 @@ export const authzActions = [
   "createOrganizationInvite",
   "listOrganizationInvites",
   "respondToOrganizationInvite",
+  "listApiTokens",
+  "createApiToken",
+  "revokeApiToken",
   "fetchInferenceConfig",
   "createInferenceProvider",
   "updateInferenceProvider",
@@ -289,6 +328,11 @@ export const authzActions = [
   "updateInferenceModel",
   "deleteInferenceProvider",
   "updateInferenceModelDefault",
+  "listOpenAICompatibleModels",
+  "retrieveOpenAICompatibleModel",
+  "createOpenAICompatibleChatCompletion",
+  "createOpenAICompatibleResponse",
+  "createOpenAICompatibleEmbedding",
   "streamAgentChat",
   "streamAgentPrompt",
   "createAgentRun",
@@ -327,6 +371,11 @@ export const authzActions = [
 ] as const;
 
 export type AuthzAction = (typeof authzActions)[number];
+
+export const apiTokenActionScopes =
+  canonicalApiTokenActionScopes satisfies Partial<
+    Record<AuthzAction, ApiTokenScope>
+  >;
 
 const authenticatedActions = new Set<AuthzAction>([
   "logout",
@@ -373,12 +422,20 @@ export const roleActionBindings: Record<UserRole, readonly AuthzAction[]> = {
     "removeOrganizationMember",
     "createOrganizationInvite",
     "listOrganizationInvites",
+    "listApiTokens",
+    "createApiToken",
+    "revokeApiToken",
     "createInferenceProvider",
     "updateInferenceProvider",
     "refreshInferenceProviderModels",
     "updateInferenceModel",
     "deleteInferenceProvider",
     "updateInferenceModelDefault",
+    "listOpenAICompatibleModels",
+    "retrieveOpenAICompatibleModel",
+    "createOpenAICompatibleChatCompletion",
+    "createOpenAICompatibleResponse",
+    "createOpenAICompatibleEmbedding",
     "getToolGatewaySettings",
     "updateToolGatewaySettings",
     "listToolConnections",
@@ -394,6 +451,11 @@ export const roleActionBindings: Record<UserRole, readonly AuthzAction[]> = {
   ],
   user: [
     "fetchInferenceConfig",
+    "listOpenAICompatibleModels",
+    "retrieveOpenAICompatibleModel",
+    "createOpenAICompatibleChatCompletion",
+    "createOpenAICompatibleResponse",
+    "createOpenAICompatibleEmbedding",
     "streamAgentChat",
     "streamAgentPrompt",
     "createAgentRun",
@@ -467,6 +529,216 @@ export function authorizePrincipal(principal: Principal, action: AuthzAction) {
     "You do not have permission to perform this action",
     403
   );
+}
+
+export function authorizeApiToken(
+  principal: ApiTokenPrincipal,
+  action: AuthzAction
+) {
+  const requiredScope = apiTokenActionScopes[action as keyof typeof apiTokenActionScopes];
+  if (!requiredScope) {
+    throw new AuthError(
+      "api_token_not_allowed",
+      "API tokens cannot access this route",
+      403
+    );
+  }
+  if (!principal.scopes.includes(requiredScope)) {
+    throw new AuthError(
+      "insufficient_scope",
+      `API token requires the '${requiredScope}' scope`,
+      403
+    );
+  }
+
+  authorizePrincipal(principal, action);
+
+  return {
+    allowed: true as const,
+    action,
+    scope: requiredScope,
+    organizationId: principal.organizationId
+  };
+}
+
+export async function listApiTokens(
+  principal: Principal,
+  options: ApiTokenRuntimeOptions = {}
+) {
+  assertCanManageOrganization(principal);
+  const organizationId = requireOrganizationId(principal);
+  const tokens = await (options.db ?? getDb())
+    .selectFrom("apiTokens")
+    .selectAll()
+    .where("organizationId", "=", organizationId)
+    .where("revokedAt", "is", null)
+    .orderBy("createdAt", "desc")
+    .execute();
+
+  return { tokens: tokens.map(toApiToken) };
+}
+
+export async function createApiToken(
+  principal: Principal,
+  request: unknown,
+  options: ApiTokenRuntimeOptions = {}
+) {
+  assertCanManageOrganization(principal);
+  const organizationId = requireOrganizationId(principal);
+  const body = normalizeCreateApiTokenRequest(request);
+  const db = options.db ?? getDb();
+  const now = options.now ?? new Date();
+  const expiresAt = body.expiresInDays
+    ? new Date(now.getTime() + body.expiresInDays * 24 * 60 * 60 * 1000)
+    : null;
+  const publicId = randomHex(8);
+  const secret = `sk_${publicId}_${randomHex(32)}`;
+  const prefix = `sk_${publicId}`;
+
+  const token = await db.transaction().execute(async (trx) => {
+    const row = await trx
+      .insertInto("apiTokens")
+      .values({
+        organizationId,
+        name: body.name,
+        tokenPrefix: prefix,
+        tokenHash: await hashSecret(secret),
+        scopes: body.scopes,
+        createdByUserId: principal.userId,
+        expiresAt,
+        lastUsedAt: null,
+        revokedAt: null,
+        createdAt: now
+      })
+      .returningAll()
+      .executeTakeFirstOrThrow();
+
+    await recordAuditEvent(trx, {
+      organizationId,
+      userId: principal.userId,
+      sessionId: principal.sessionId,
+      action: "auth.api_token_created",
+      targetType: "api_token",
+      targetId: row.id,
+      metadata: {
+        name: row.name,
+        prefix: row.tokenPrefix,
+        scopes: row.scopes,
+        expiresAt: row.expiresAt?.toISOString() ?? null
+      }
+    });
+
+    return row;
+  });
+
+  return { token: toApiToken(token), secret };
+}
+
+export async function revokeApiToken(
+  principal: Principal,
+  tokenId: string,
+  options: ApiTokenRuntimeOptions = {}
+) {
+  assertCanManageOrganization(principal);
+  const organizationId = requireOrganizationId(principal);
+  if (!tokenId) {
+    throw new AuthError("invalid_api_token", "API token id is required");
+  }
+
+  const db = options.db ?? getDb();
+  const token = await db.transaction().execute(async (trx) => {
+    const now = options.now ?? new Date();
+    const row = await trx
+      .updateTable("apiTokens")
+      .set({ revokedAt: now })
+      .where("id", "=", tokenId)
+      .where("organizationId", "=", organizationId)
+      .where("revokedAt", "is", null)
+      .returningAll()
+      .executeTakeFirst();
+
+    if (!row) {
+      throw new AuthError(
+        "api_token_not_found",
+        "API token was not found or is already revoked",
+        404
+      );
+    }
+
+    await recordAuditEvent(trx, {
+      organizationId,
+      userId: principal.userId,
+      sessionId: principal.sessionId,
+      action: "auth.api_token_revoked",
+      targetType: "api_token",
+      targetId: row.id,
+      metadata: { name: row.name, prefix: row.tokenPrefix, scopes: row.scopes }
+    });
+    return row;
+  });
+
+  return { token: toApiToken(token) };
+}
+
+export async function resolveApiToken(
+  token: string,
+  options: ApiTokenRuntimeOptions = {}
+): Promise<ApiTokenPrincipal | undefined> {
+  if (!/^sk_[0-9a-f]{16}_[0-9a-f]{64}$/.test(token)) {
+    return undefined;
+  }
+
+  const db = options.db ?? getDb();
+  const now = options.now ?? new Date();
+  const row = await db
+    .selectFrom("apiTokens")
+    .innerJoin("organizationMemberships", (join) =>
+      join
+        .onRef("organizationMemberships.userId", "=", "apiTokens.createdByUserId")
+        .onRef("organizationMemberships.organizationId", "=", "apiTokens.organizationId")
+    )
+    .select([
+      "apiTokens.id as tokenId",
+      "apiTokens.organizationId",
+      "apiTokens.createdByUserId as userId",
+      "apiTokens.scopes",
+      "apiTokens.lastUsedAt",
+      "organizationMemberships.id as membershipId",
+      "organizationMemberships.role"
+    ])
+    .where("tokenHash", "=", await hashSecret(token))
+    .where("revokedAt", "is", null)
+    .where((eb) =>
+      eb.or([eb("expiresAt", "is", null), eb("expiresAt", ">", now)])
+    )
+    .executeTakeFirst();
+  if (!row?.userId) return undefined;
+
+  if (!row.lastUsedAt || row.lastUsedAt < new Date(now.getTime() - 5 * 60_000)) {
+    await db
+      .updateTable("apiTokens")
+      .set({ lastUsedAt: now })
+      .where("id", "=", row.tokenId)
+      .where("revokedAt", "is", null)
+      .execute();
+  }
+
+  return {
+    tokenId: row.tokenId,
+    userId: row.userId,
+    organizationId: row.organizationId,
+    membershipId: row.membershipId,
+    role: row.role,
+    sessionId: null,
+    scopes: row.scopes
+  };
+}
+
+export function apiTokenHasScope(
+  principal: ApiTokenPrincipal,
+  scope: ApiTokenScope
+) {
+  return principal.scopes.includes(scope);
 }
 
 export async function registerAccount(
@@ -1043,7 +1315,7 @@ export async function resolvePrincipal(
 }
 
 export async function revokeSession(principal: Principal) {
-  await revokeSessionId(getDb(), principal.sessionId);
+  await revokeSessionId(getDb(), requireSessionId(principal));
 
   return { ok: true as const };
 }
@@ -1114,7 +1386,7 @@ export async function switchOrganization(
       );
     }
 
-    await revokeSessionId(trx, principal.sessionId);
+    await revokeSessionId(trx, requireSessionId(principal));
     const refreshSession = await createSession(trx, {
       userId: principal.userId,
       organizationId: membership.organizationId,
@@ -1173,7 +1445,7 @@ export async function createOrganization(
       }
     });
 
-    await revokeSessionId(trx, principal.sessionId);
+    await revokeSessionId(trx, requireSessionId(principal));
     const refreshSession = await createSession(trx, {
       userId: principal.userId,
       organizationId: organization.id,
@@ -1216,7 +1488,7 @@ export async function updateCurrentUser(
     }
   });
 
-  return loadSessionResponse(db, principal.sessionId);
+  return loadSessionResponse(db, requireSessionId(principal));
 }
 
 export async function updateCurrentOrganization(
@@ -1249,7 +1521,7 @@ export async function updateCurrentOrganization(
     }
   });
 
-  return loadSessionResponse(db, principal.sessionId);
+  return loadSessionResponse(db, requireSessionId(principal));
 }
 
 export async function deleteCurrentOrganization(
@@ -1318,12 +1590,13 @@ export async function listOrganizationMembers(principal: Principal) {
 
 export async function updateOrganizationMemberRole(
   principal: Principal,
-  request: unknown
+  request: unknown,
+  options: Pick<ApiTokenRuntimeOptions, "db"> = {}
 ) {
   assertCanManageOrganization(principal);
   const organizationId = requireOrganizationId(principal);
   const body = normalizeUpdateOrganizationMemberRoleRequest(request);
-  const db = getDb();
+  const db = options.db ?? getDb();
 
   return db.transaction().execute(async (trx) => {
     await lockOrganizationMemberships(trx, organizationId);
@@ -1358,11 +1631,13 @@ export async function updateOrganizationMemberRole(
     await recordAuditEvent(trx, {
       organizationId,
       userId: principal.userId,
+      sessionId: principal.sessionId,
       action: "auth.organization_member_role_updated",
       targetType: "organization_membership",
       targetId: body.membershipId,
       metadata: {
-        role: body.role
+        role: body.role,
+        ...(principal.tokenId ? { apiTokenId: principal.tokenId } : {})
       }
     });
 
@@ -1410,10 +1685,11 @@ export async function removeOrganizationMember(
     await recordAuditEvent(trx, {
       organizationId,
       userId: principal.userId,
+      sessionId: principal.sessionId,
       action: "auth.organization_member_removed",
       targetType: "organization_membership",
       targetId: body.membershipId,
-      metadata: {}
+      metadata: principal.tokenId ? { apiTokenId: principal.tokenId } : {}
     });
 
     return loadOrganizationMembers(trx, organizationId);
@@ -1497,7 +1773,8 @@ export async function createOrganizationInvite(
         email: invite.email,
         role: invite.role,
         expiresAt: invite.expiresAt.toISOString(),
-        reissued: Boolean(pendingInvite)
+        reissued: Boolean(pendingInvite),
+        ...(principal.tokenId ? { apiTokenId: principal.tokenId } : {})
       }
     });
 
@@ -2071,6 +2348,18 @@ function requireOrganizationId(principal: Principal) {
   }
 
   return principal.organizationId;
+}
+
+function requireSessionId(principal: Principal) {
+  if (!principal.sessionId) {
+    throw new AuthError(
+      "session_required",
+      "An interactive session is required",
+      403
+    );
+  }
+
+  return principal.sessionId;
 }
 
 export function authAssertionEmailVerified(assertion: AuthAssertion) {
@@ -2805,6 +3094,80 @@ function parseAccessClaims(value: Record<string, unknown>): AccessTokenClaims {
 
 function isUserRole(value: unknown): value is UserRole {
   return value === "admin" || value === "user";
+}
+
+function normalizeCreateApiTokenRequest(request: unknown) {
+  if (!request || typeof request !== "object") {
+    throw new AuthError("invalid_api_token", "Invalid API token request");
+  }
+  const candidate = request as {
+    name?: unknown;
+    scopes?: unknown;
+    expiresInDays?: unknown;
+  };
+  const name = typeof candidate.name === "string" ? candidate.name.trim() : "";
+  if (!name || name.length > 100) {
+    throw new AuthError(
+      "invalid_api_token_name",
+      "API token name must contain 1-100 characters"
+    );
+  }
+  if (!Array.isArray(candidate.scopes) || candidate.scopes.length === 0) {
+    throw new AuthError(
+      "invalid_api_token_scopes",
+      "At least one API token scope is required"
+    );
+  }
+  const allowedScopes = new Set<string>(apiTokenScopes);
+  const scopes = [...new Set(candidate.scopes)];
+  if (
+    scopes.some(
+      (scope): boolean => typeof scope !== "string" || !allowedScopes.has(scope)
+    )
+  ) {
+    throw new AuthError(
+      "invalid_api_token_scopes",
+      "API token scopes contain an unsupported value"
+    );
+  }
+  if (
+    candidate.expiresInDays !== undefined &&
+    (!Number.isInteger(candidate.expiresInDays) ||
+      (candidate.expiresInDays as number) < 1 ||
+      (candidate.expiresInDays as number) > 365)
+  ) {
+    throw new AuthError(
+      "invalid_api_token_expiry",
+      "API token expiry must be between 1 and 365 days"
+    );
+  }
+
+  return {
+    name,
+    scopes: scopes as ApiTokenScope[],
+    expiresInDays: candidate.expiresInDays as number | undefined
+  };
+}
+
+function toApiToken(row: Selectable<ApiTokensTable>): ApiToken {
+  return {
+    id: row.id,
+    organizationId: row.organizationId,
+    name: row.name,
+    prefix: row.tokenPrefix,
+    scopes: row.scopes,
+    createdByUserId: row.createdByUserId,
+    expiresAt: row.expiresAt?.toISOString() ?? null,
+    lastUsedAt: row.lastUsedAt?.toISOString() ?? null,
+    revokedAt: row.revokedAt?.toISOString() ?? null,
+    createdAt: row.createdAt.toISOString()
+  };
+}
+
+function randomHex(byteLength: number) {
+  const bytes = new Uint8Array(byteLength);
+  crypto.getRandomValues(bytes);
+  return bytesToHex(bytes);
 }
 
 
