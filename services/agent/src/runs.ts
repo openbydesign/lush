@@ -940,7 +940,7 @@ async function recordRunAudit(
   principal: AgentRunPrincipal,
   runId: string,
   action: string,
-  metadata: unknown
+  metadata: Record<string, unknown>
 ) {
   await trx.insertInto("auditEvents").values({
     organizationId: principal.organizationId,
@@ -949,7 +949,10 @@ async function recordRunAudit(
     action,
     targetType: "agent_run",
     targetId: runId,
-    metadata,
+    metadata: {
+      ...metadata,
+      ...(principal.tokenId ? { apiTokenId: principal.tokenId } : {})
+    },
     createdAt: new Date()
   }).execute();
 }

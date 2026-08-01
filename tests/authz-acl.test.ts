@@ -1,9 +1,13 @@
 import { expect, test } from "bun:test";
 import {
   AuthError,
+  apiTokenActionScopes,
+  apiTokenScopes,
+  authorizeApiToken,
   authzActions,
   authorizePrincipal,
   roleActionBindings,
+  type ApiTokenPrincipal,
   type Principal
 } from "../services/authz/src/runtime";
 import { apiSpec } from "../services/api/src/spec";
@@ -34,6 +38,50 @@ test("protected api routes have matching authz actions", () => {
     .filter((routeId) => !knownActions.has(routeId));
 
   expect(missingActions).toEqual([]);
+});
+
+test("API token scopes use canonical resources and explicitly bound actions", () => {
+  expect(apiTokenScopes).toEqual([
+    "organization:read",
+    "organization:write",
+    "inference:read",
+    "inference:write",
+    "inference:invoke",
+    "agents:read",
+    "agents:write",
+    "sessions:read",
+    "sessions:write",
+    "tools:read",
+    "tools:write"
+  ]);
+  expect(Object.keys(apiTokenActionScopes).every((action) =>
+    authzActions.includes(action as (typeof authzActions)[number])
+  )).toBe(true);
+  expect(new Set(Object.values(apiTokenActionScopes))).toEqual(
+    new Set(apiTokenScopes)
+  );
+});
+
+test("API tokens default deny routes without an explicit matching scope", () => {
+  const tokenPrincipal: ApiTokenPrincipal = {
+    ...basePrincipal,
+    organizationId: "org-1",
+    membershipId: "membership-1",
+    role: "admin",
+    tokenId: "token-1",
+    scopes: ["sessions:read"]
+  };
+
+  expect(authorizeApiToken(tokenPrincipal, "listSessions").allowed).toBe(true);
+  expect(() => authorizeApiToken(tokenPrincipal, "createSession")).toThrow(
+    AuthError
+  );
+  expect(() => authorizeApiToken(tokenPrincipal, "createApiToken")).toThrow(
+    AuthError
+  );
+  expect(() => authorizeApiToken(tokenPrincipal, "fetchSession")).toThrow(
+    AuthError
+  );
 });
 
 test("role action bindings keep users read-only for organization and inference settings", () => {

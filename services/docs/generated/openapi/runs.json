@@ -30,6 +30,7 @@
             "bearerAuth": []
           }
         ],
+        "x-lush-api-token-scope": "agents:read",
         "parameters": [
           {
             "name": "runId",
@@ -87,6 +88,7 @@
             "bearerAuth": []
           }
         ],
+        "x-lush-api-token-scope": "agents:read",
         "parameters": [
           {
             "name": "runId",
@@ -155,6 +157,7 @@
             "bearerAuth": []
           }
         ],
+        "x-lush-api-token-scope": "agents:write",
         "parameters": [
           {
             "name": "runId",
@@ -1043,8 +1046,17 @@
       "ApiTokenScope": {
         "type": "string",
         "enum": [
-          "inference:models:read",
-          "inference:invoke"
+          "organization:read",
+          "organization:write",
+          "inference:read",
+          "inference:write",
+          "inference:invoke",
+          "agents:read",
+          "agents:write",
+          "sessions:read",
+          "sessions:write",
+          "tools:read",
+          "tools:write"
         ],
         "description": "Capability granted to an API token."
       },
@@ -1155,7 +1167,7 @@
             "items": {
               "$ref": "#/components/schemas/ApiToken"
             },
-            "description": "Organization API tokens, including revoked tokens."
+            "description": "Active and expired organization API tokens. Revoked tokens are omitted."
           }
         },
         "required": [

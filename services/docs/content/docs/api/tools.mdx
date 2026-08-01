@@ -1,0 +1,13 @@
+---
+title: Tools
+description: Tool gateway configuration, discovery, invocation, and approval routes.
+---
+
+import spec from "../../../generated/openapi/tools.json";
+import { OpenApiRouteGroup } from "../../../components/openapi-route-group";
+
+Use `tools:read` for gateway, connection, and saved-catalog reads. Use
+`tools:write` for connection management, catalog discovery and acknowledgment,
+invocation, and approval.
+
+<OpenApiRouteGroup spec={spec} />

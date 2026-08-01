@@ -48,7 +48,7 @@ if (!databaseUrl) {
         admin,
         {
           name: "Production router",
-          scopes: ["inference:models:read", "inference:invoke"],
+          scopes: ["inference:read", "inference:invoke"],
           expiresInDays: 30
         },
         { db, now }
@@ -58,7 +58,7 @@ if (!databaseUrl) {
       expect(created.token).toMatchObject({
         name: "Production router",
         prefix: created.secret.slice(0, "sk_".length + 16),
-        scopes: ["inference:models:read", "inference:invoke"],
+        scopes: ["inference:read", "inference:invoke"],
         expiresAt: new Date(now.getTime() + 30 * 86_400_000).toISOString(),
         revokedAt: null
       });
@@ -78,8 +78,12 @@ if (!databaseUrl) {
       });
       expect(resolved).toEqual({
         tokenId: created.token.id,
+        userId: admin.userId,
         organizationId: created.token.organizationId,
-        scopes: ["inference:models:read", "inference:invoke"]
+        membershipId: admin.membershipId,
+        role: "admin",
+        sessionId: created.token.id,
+        scopes: ["inference:read", "inference:invoke"]
       });
       expect(apiTokenHasScope(resolved!, "inference:invoke")).toBe(true);
 
@@ -89,6 +93,9 @@ if (!databaseUrl) {
     });
 
     test("rejects unsupported scopes and non-admin management", async () => {
+      await expect(
+        createApiToken(admin, { name: "No access", scopes: [] }, { db })
+      ).rejects.toMatchObject({ code: "invalid_api_token_scopes" });
       await expect(
         createApiToken(
           admin,
@@ -105,13 +112,29 @@ if (!databaseUrl) {
       ).rejects.toMatchObject({ code: "insufficient_role" });
     });
 
+    test("invalidates tokens when their creating user leaves the organization", async () => {
+      const actor = await insertPrincipal(db, admin.organizationId!, "admin");
+      const created = await createApiToken(
+        actor,
+        { name: "Departing owner", scopes: ["sessions:read"] },
+        { db }
+      );
+
+      await db
+        .deleteFrom("organizationMemberships")
+        .where("id", "=", actor.membershipId!)
+        .execute();
+
+      expect(await resolveApiToken(created.secret, { db })).toBeUndefined();
+    });
+
     test("revocation and expiration fail closed", async () => {
       const now = new Date("2026-07-31T13:00:00.000Z");
       const created = await createApiToken(
         admin,
         {
           name: "Temporary",
-          scopes: ["inference:models:read"],
+          scopes: ["inference:read"],
           expiresInDays: 1
         },
         { db, now }
@@ -133,6 +156,8 @@ if (!databaseUrl) {
           now: new Date(now.getTime() + 2)
         })
       ).toBeUndefined();
+      const listed = await listApiTokens(admin, { db });
+      expect(listed.tokens.some((token) => token.id === created.token.id)).toBe(false);
 
       const actions = await db
         .selectFrom("auditEvents")

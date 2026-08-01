@@ -20,6 +20,7 @@ import { retireCurrentTimeTool } from "./019_retire_current_time_tool";
 import { toolCallDefinitionDigest } from "./020_tool_call_definition_digest";
 import { toolDefinitionTimeout } from "./021_tool_definition_timeout";
 import { apiTokens } from "./022_api_tokens";
+import { apiTokenCanonicalScopes } from "./023_api_token_canonical_scopes";
 import type { Migration } from "./types";
 
 export const migrations: Migration[] = [
@@ -44,5 +45,6 @@ export const migrations: Migration[] = [
   retireCurrentTimeTool,
   toolCallDefinitionDigest,
   toolDefinitionTimeout,
-  apiTokens
+  apiTokens,
+  apiTokenCanonicalScopes
 ];

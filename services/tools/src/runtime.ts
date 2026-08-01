@@ -59,6 +59,7 @@ export type ToolsPrincipal = {
   userId: string;
   organizationId: string;
   role: UserRole;
+  tokenId?: string;
 };
 
 export type ToolConnectionScope = "organization" | "user";

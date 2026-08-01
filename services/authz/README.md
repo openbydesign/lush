@@ -16,8 +16,11 @@ protected API requests.
 Organization API tokens are separate, top-level credentials for programmatic
 access. Admins create and revoke them through `/v1beta/tokens`; each token stores
 explicit scopes, an optional expiration, and only a SHA-256 hash of its random
-secret. The secret is returned once. API tokens do not impersonate the creating
-user and are accepted only by services that explicitly authorize their scopes.
+secret. The secret is returned once. Canonical read, write, and invoke scopes
+authorize eligible organization API routes. User-owned resources are accessed
+as the creating admin, and removing that user's organization membership
+invalidates the token. Account/session lifecycle and API-token administration
+remain interactive-JWT-only operations.
 
 Email verification uses random, single-use, expiring tokens stored only as
 SHA-256 hashes. Password-reset tokens use the same discipline, and a completed

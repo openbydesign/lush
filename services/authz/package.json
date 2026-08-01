@@ -17,6 +17,7 @@
     "kysely": "^0.28.7"
   },
   "exports": {
+    "./api-token-scopes": "./src/api-token-scopes.ts",
     "./email": "./src/email.ts",
     "./jwt-keys": "./src/jwt-keys.ts",
     "./refresh-token": "./src/refresh-token.ts",

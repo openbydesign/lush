@@ -17,8 +17,8 @@ selection with the provider-native model identifier and forwards the remaining
 request and response without narrowing the provider contract.
 
 Programmatic clients should create a top-level organization API token and grant
-only `inference:models:read` and/or `inference:invoke`. Interactive Lush access
-tokens remain accepted for signed-in clients.
+only `inference:read`, `inference:write`, and/or `inference:invoke` as needed.
+Interactive Lush access tokens remain accepted for signed-in clients.
 
 Only enabled models with an OpenAI-compatible interface (or unknown interface
 metadata) appear in this model list. When discovery supplied explicit interface

@@ -53,7 +53,7 @@
     },
     {
       "name": "tools",
-      "description": "Tools routes."
+      "description": "Tool gateway configuration, discovery, invocation, and approval routes."
     },
     {
       "name": "health",
@@ -827,6 +827,7 @@
             "bearerAuth": []
           }
         ],
+        "x-lush-api-token-scope": "organization:read",
         "responses": {
           "200": {
             "description": "Organization member list.",
@@ -873,6 +874,7 @@
             "bearerAuth": []
           }
         ],
+        "x-lush-api-token-scope": "organization:write",
         "requestBody": {
           "required": true,
           "description": "Membership identifier and new role.",
@@ -930,6 +932,7 @@
             "bearerAuth": []
           }
         ],
+        "x-lush-api-token-scope": "organization:write",
         "requestBody": {
           "required": true,
           "description": "Membership identifier to remove.",
@@ -987,6 +990,7 @@
             "bearerAuth": []
           }
         ],
+        "x-lush-api-token-scope": "organization:write",
         "requestBody": {
           "required": true,
           "description": "Invite email, role, and optional expiration window.",
@@ -1042,6 +1046,7 @@
             "bearerAuth": []
           }
         ],
+        "x-lush-api-token-scope": "organization:read",
         "responses": {
           "200": {
             "description": "Organization invite list.",
@@ -1312,6 +1317,7 @@
             "bearerAuth": []
           }
         ],
+        "x-lush-api-token-scope": "inference:read",
         "responses": {
           "200": {
             "description": "Complete inference configuration for the active organization.",
@@ -1358,6 +1364,7 @@
             "bearerAuth": []
           }
         ],
+        "x-lush-api-token-scope": "inference:write",
         "requestBody": {
           "required": true,
           "description": "Provider kind, label, API key, and optional base URL override.",
@@ -1415,6 +1422,7 @@
             "bearerAuth": []
           }
         ],
+        "x-lush-api-token-scope": "inference:write",
         "requestBody": {
           "required": true,
           "description": "Provider identifier and enabled state.",
@@ -1472,6 +1480,7 @@
             "bearerAuth": []
           }
         ],
+        "x-lush-api-token-scope": "inference:write",
         "requestBody": {
           "required": true,
           "description": "Provider identifier.",
@@ -1529,6 +1538,7 @@
             "bearerAuth": []
           }
         ],
+        "x-lush-api-token-scope": "inference:write",
         "requestBody": {
           "required": true,
           "description": "Provider identifier, model identifier, and enabled state.",
@@ -1586,6 +1596,7 @@
             "bearerAuth": []
           }
         ],
+        "x-lush-api-token-scope": "inference:write",
         "requestBody": {
           "required": true,
           "description": "Provider identifier.",
@@ -1643,6 +1654,7 @@
             "bearerAuth": []
           }
         ],
+        "x-lush-api-token-scope": "inference:write",
         "requestBody": {
           "required": true,
           "description": "Workspace mode and model selection.",
@@ -1700,6 +1712,7 @@
             "bearerAuth": []
           }
         ],
+        "x-lush-api-token-scope": "inference:read",
         "responses": {
           "200": {
             "description": "Enabled organization model list.",
@@ -1767,6 +1780,7 @@
             "bearerAuth": []
           }
         ],
+        "x-lush-api-token-scope": "inference:read",
         "parameters": [
           {
             "name": "model",
@@ -1845,6 +1859,7 @@
             "bearerAuth": []
           }
         ],
+        "x-lush-api-token-scope": "inference:invoke",
         "requestBody": {
           "required": true,
           "description": "OpenAI Chat Completions request using a routed model id.",
@@ -1928,6 +1943,7 @@
             "bearerAuth": []
           }
         ],
+        "x-lush-api-token-scope": "inference:invoke",
         "requestBody": {
           "required": true,
           "description": "OpenAI Responses request using a routed model id.",
@@ -2011,6 +2027,7 @@
             "bearerAuth": []
           }
         ],
+        "x-lush-api-token-scope": "inference:invoke",
         "requestBody": {
           "required": true,
           "description": "OpenAI Embeddings request using a routed model id.",
@@ -2089,6 +2106,7 @@
             "bearerAuth": []
           }
         ],
+        "x-lush-api-token-scope": "sessions:read",
         "responses": {
           "200": {
             "description": "Owned project summaries.",
@@ -2131,6 +2149,7 @@
             "bearerAuth": []
           }
         ],
+        "x-lush-api-token-scope": "sessions:write",
         "requestBody": {
           "required": true,
           "description": "Project name.",
@@ -2184,6 +2203,7 @@
             "bearerAuth": []
           }
         ],
+        "x-lush-api-token-scope": "sessions:read",
         "parameters": [
           {
             "name": "projectId",
@@ -2236,6 +2256,7 @@
             "bearerAuth": []
           }
         ],
+        "x-lush-api-token-scope": "sessions:write",
         "parameters": [
           {
             "name": "projectId",
@@ -2299,6 +2320,7 @@
             "bearerAuth": []
           }
         ],
+        "x-lush-api-token-scope": "sessions:write",
         "parameters": [
           {
             "name": "projectId",
@@ -2362,6 +2384,7 @@
             "bearerAuth": []
           }
         ],
+        "x-lush-api-token-scope": "sessions:write",
         "parameters": [
           {
             "name": "projectId",
@@ -2425,6 +2448,7 @@
             "bearerAuth": []
           }
         ],
+        "x-lush-api-token-scope": "sessions:write",
         "parameters": [
           {
             "name": "projectId",
@@ -2496,6 +2520,7 @@
             "bearerAuth": []
           }
         ],
+        "x-lush-api-token-scope": "sessions:read",
         "responses": {
           "200": {
             "description": "Owned session summaries.",
@@ -2540,6 +2565,7 @@
             "bearerAuth": []
           }
         ],
+        "x-lush-api-token-scope": "sessions:write",
         "requestBody": {
           "required": true,
           "description": "Agent identifier and optional title.",
@@ -2597,6 +2623,7 @@
             "bearerAuth": []
           }
         ],
+        "x-lush-api-token-scope": "sessions:read",
         "parameters": [
           {
             "name": "sessionId",
@@ -2652,6 +2679,7 @@
             "bearerAuth": []
           }
         ],
+        "x-lush-api-token-scope": "sessions:write",
         "parameters": [
           {
             "name": "sessionId",
@@ -2720,6 +2748,7 @@
             "bearerAuth": []
           }
         ],
+        "x-lush-api-token-scope": "sessions:write",
         "parameters": [
           {
             "name": "sessionId",
@@ -2788,6 +2817,7 @@
             "bearerAuth": []
           }
         ],
+        "x-lush-api-token-scope": "sessions:write",
         "parameters": [
           {
             "name": "sessionId",
@@ -2856,6 +2886,7 @@
             "bearerAuth": []
           }
         ],
+        "x-lush-api-token-scope": "sessions:write",
         "parameters": [
           {
             "name": "sessionId",
@@ -2924,6 +2955,7 @@
             "bearerAuth": []
           }
         ],
+        "x-lush-api-token-scope": "sessions:write",
         "parameters": [
           {
             "name": "sessionId",
@@ -2992,6 +3024,7 @@
             "bearerAuth": []
           }
         ],
+        "x-lush-api-token-scope": "sessions:read",
         "responses": {
           "200": {
             "description": "Session-state settings.",
@@ -3036,6 +3069,7 @@
             "bearerAuth": []
           }
         ],
+        "x-lush-api-token-scope": "sessions:write",
         "requestBody": {
           "required": true,
           "description": "Session-state settings to update.",
@@ -3093,6 +3127,7 @@
             "bearerAuth": []
           }
         ],
+        "x-lush-api-token-scope": "agents:write",
         "parameters": [
           {
             "name": "sessionId",
@@ -3162,6 +3197,7 @@
             "bearerAuth": []
           }
         ],
+        "x-lush-api-token-scope": "agents:read",
         "parameters": [
           {
             "name": "runId",
@@ -3219,6 +3255,7 @@
             "bearerAuth": []
           }
         ],
+        "x-lush-api-token-scope": "agents:read",
         "parameters": [
           {
             "name": "runId",
@@ -3287,6 +3324,7 @@
             "bearerAuth": []
           }
         ],
+        "x-lush-api-token-scope": "agents:write",
         "parameters": [
           {
             "name": "runId",
@@ -3353,6 +3391,7 @@
             "bearerAuth": []
           }
         ],
+        "x-lush-api-token-scope": "agents:write",
         "parameters": [
           {
             "name": "agentSlug",
@@ -3422,6 +3461,7 @@
             "bearerAuth": []
           }
         ],
+        "x-lush-api-token-scope": "agents:write",
         "parameters": [
           {
             "name": "agentSlug",
@@ -3490,6 +3530,7 @@
             "bearerAuth": []
           }
         ],
+        "x-lush-api-token-scope": "tools:read",
         "responses": {
           "200": {
             "description": "Successful response.",
@@ -3531,6 +3572,7 @@
             "bearerAuth": []
           }
         ],
+        "x-lush-api-token-scope": "tools:write",
         "requestBody": {
           "required": true,
           "content": {
@@ -3582,6 +3624,7 @@
             "bearerAuth": []
           }
         ],
+        "x-lush-api-token-scope": "tools:read",
         "responses": {
           "200": {
             "description": "Successful response.",
@@ -3623,6 +3666,7 @@
             "bearerAuth": []
           }
         ],
+        "x-lush-api-token-scope": "tools:write",
         "requestBody": {
           "required": true,
           "content": {
@@ -3674,6 +3718,7 @@
             "bearerAuth": []
           }
         ],
+        "x-lush-api-token-scope": "tools:write",
         "requestBody": {
           "required": true,
           "content": {
@@ -3725,6 +3770,7 @@
             "bearerAuth": []
           }
         ],
+        "x-lush-api-token-scope": "tools:write",
         "requestBody": {
           "required": true,
           "content": {
@@ -3776,6 +3822,7 @@
             "bearerAuth": []
           }
         ],
+        "x-lush-api-token-scope": "tools:read",
         "parameters": [
           {
             "name": "connectionId",
@@ -3829,6 +3876,7 @@
             "bearerAuth": []
           }
         ],
+        "x-lush-api-token-scope": "tools:write",
         "requestBody": {
           "required": true,
           "content": {
@@ -3880,6 +3928,7 @@
             "bearerAuth": []
           }
         ],
+        "x-lush-api-token-scope": "tools:write",
         "parameters": [
           {
             "name": "connectionId",
@@ -3933,6 +3982,7 @@
             "bearerAuth": []
           }
         ],
+        "x-lush-api-token-scope": "tools:write",
         "parameters": [
           {
             "name": "connectionId",
@@ -3994,6 +4044,7 @@
             "bearerAuth": []
           }
         ],
+        "x-lush-api-token-scope": "tools:write",
         "parameters": [
           {
             "name": "connectionId",
@@ -4055,6 +4106,7 @@
             "bearerAuth": []
           }
         ],
+        "x-lush-api-token-scope": "tools:write",
         "parameters": [
           {
             "name": "approvalId",
@@ -5001,8 +5053,17 @@
       "ApiTokenScope": {
         "type": "string",
         "enum": [
-          "inference:models:read",
-          "inference:invoke"
+          "organization:read",
+          "organization:write",
+          "inference:read",
+          "inference:write",
+          "inference:invoke",
+          "agents:read",
+          "agents:write",
+          "sessions:read",
+          "sessions:write",
+          "tools:read",
+          "tools:write"
         ],
         "description": "Capability granted to an API token."
       },
@@ -5113,7 +5174,7 @@
             "items": {
               "$ref": "#/components/schemas/ApiToken"
             },
-            "description": "Organization API tokens, including revoked tokens."
+            "description": "Active and expired organization API tokens. Revoked tokens are omitted."
           }
         },
         "required": [

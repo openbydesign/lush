@@ -17,6 +17,10 @@ import type {
 import { createLogger } from "@lush/logging/logger";
 import type { EmailDelivery } from "@lush/notifications/email";
 import {
+  canonicalApiTokenActionScopes,
+  canonicalApiTokenScopes
+} from "./api-token-scopes";
+import {
   createRefreshToken,
   refreshTokenFamilySecret,
   rotateRefreshToken
@@ -49,14 +53,14 @@ export type Principal = {
   tokenId?: string;
 };
 
-export const apiTokenScopes = [
-  "inference:models:read",
-  "inference:invoke"
-] as const satisfies readonly ApiTokenScope[];
+export const apiTokenScopes =
+  canonicalApiTokenScopes satisfies readonly ApiTokenScope[];
 
-export type ApiTokenPrincipal = {
+export type ApiTokenPrincipal = Principal & {
   tokenId: string;
   organizationId: string;
+  membershipId: string;
+  role: "admin";
   scopes: ApiTokenScope[];
 };
 
@@ -367,6 +371,11 @@ export const authzActions = [
 
 export type AuthzAction = (typeof authzActions)[number];
 
+export const apiTokenActionScopes =
+  canonicalApiTokenActionScopes satisfies Partial<
+    Record<AuthzAction, ApiTokenScope>
+  >;
+
 const authenticatedActions = new Set<AuthzAction>([
   "logout",
   "logoutAllSessions",
@@ -521,6 +530,34 @@ export function authorizePrincipal(principal: Principal, action: AuthzAction) {
   );
 }
 
+export function authorizeApiToken(
+  principal: ApiTokenPrincipal,
+  action: AuthzAction
+) {
+  const requiredScope = apiTokenActionScopes[action as keyof typeof apiTokenActionScopes];
+  if (!requiredScope) {
+    throw new AuthError(
+      "api_token_not_allowed",
+      "API tokens cannot access this route",
+      403
+    );
+  }
+  if (!principal.scopes.includes(requiredScope)) {
+    throw new AuthError(
+      "insufficient_scope",
+      `API token requires the '${requiredScope}' scope`,
+      403
+    );
+  }
+
+  return {
+    allowed: true as const,
+    action,
+    scope: requiredScope,
+    organizationId: principal.organizationId
+  };
+}
+
 export async function listApiTokens(
   principal: Principal,
   options: ApiTokenRuntimeOptions = {}
@@ -531,6 +568,7 @@ export async function listApiTokens(
     .selectFrom("apiTokens")
     .selectAll()
     .where("organizationId", "=", organizationId)
+    .where("revokedAt", "is", null)
     .orderBy("createdAt", "desc")
     .execute();
 
@@ -651,27 +689,43 @@ export async function resolveApiToken(
   const now = options.now ?? new Date();
   const row = await db
     .selectFrom("apiTokens")
-    .select(["id", "organizationId", "scopes", "lastUsedAt"])
+    .innerJoin("organizationMemberships", (join) =>
+      join
+        .onRef("organizationMemberships.userId", "=", "apiTokens.createdByUserId")
+        .onRef("organizationMemberships.organizationId", "=", "apiTokens.organizationId")
+    )
+    .select([
+      "apiTokens.id as tokenId",
+      "apiTokens.organizationId",
+      "apiTokens.createdByUserId as userId",
+      "apiTokens.scopes",
+      "apiTokens.lastUsedAt",
+      "organizationMemberships.id as membershipId"
+    ])
     .where("tokenHash", "=", await hashSecret(token))
     .where("revokedAt", "is", null)
     .where((eb) =>
       eb.or([eb("expiresAt", "is", null), eb("expiresAt", ">", now)])
     )
     .executeTakeFirst();
-  if (!row) return undefined;
+  if (!row?.userId) return undefined;
 
   if (!row.lastUsedAt || row.lastUsedAt < new Date(now.getTime() - 5 * 60_000)) {
     await db
       .updateTable("apiTokens")
       .set({ lastUsedAt: now })
-      .where("id", "=", row.id)
+      .where("id", "=", row.tokenId)
       .where("revokedAt", "is", null)
       .execute();
   }
 
   return {
-    tokenId: row.id,
+    tokenId: row.tokenId,
+    userId: row.userId,
     organizationId: row.organizationId,
+    membershipId: row.membershipId,
+    role: "admin",
+    sessionId: row.tokenId,
     scopes: row.scopes
   };
 }
@@ -1576,7 +1630,8 @@ export async function updateOrganizationMemberRole(
       targetType: "organization_membership",
       targetId: body.membershipId,
       metadata: {
-        role: body.role
+        role: body.role,
+        ...(principal.tokenId ? { apiTokenId: principal.tokenId } : {})
       }
     });
 
@@ -1627,7 +1682,7 @@ export async function removeOrganizationMember(
       action: "auth.organization_member_removed",
       targetType: "organization_membership",
       targetId: body.membershipId,
-      metadata: {}
+      metadata: principal.tokenId ? { apiTokenId: principal.tokenId } : {}
     });
 
     return loadOrganizationMembers(trx, organizationId);
@@ -1702,7 +1757,7 @@ export async function createOrganizationInvite(
     await recordAuditEvent(trx, {
       organizationId,
       userId: principal.userId,
-      sessionId: principal.sessionId,
+      sessionId: principal.tokenId ? null : principal.sessionId,
       action: "auth.organization_invite_created",
       targetType: "organization_invite",
       targetId: invite.id,
@@ -1711,7 +1766,8 @@ export async function createOrganizationInvite(
         email: invite.email,
         role: invite.role,
         expiresAt: invite.expiresAt.toISOString(),
-        reissued: Boolean(pendingInvite)
+        reissued: Boolean(pendingInvite),
+        ...(principal.tokenId ? { apiTokenId: principal.tokenId } : {})
       }
     });
 

@@ -1,5 +1,6 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
+import { canonicalApiTokenActionScopes } from "@lush/authz/api-token-scopes";
 import { apiSpec } from "../src/spec";
 
 type JsonSchema = Record<string, unknown>;
@@ -10,6 +11,7 @@ type Operation = {
   operationId: string;
   tags: string[];
   security?: Array<Record<string, string[]>>;
+  "x-lush-api-token-scope"?: string;
   parameters?: Array<{
     name: string;
     in: "path" | "query";
@@ -300,7 +302,19 @@ const schemas: Record<string, JsonSchema> = {
     session: describeSchema(ref("CurrentSession"), "Current authenticated session profile.")
   }, ["accessToken", "accessTokenExpiresAt", "session"], "Login or refresh response containing an access token and session profile."),
   ApiTokenScope: describeSchema(
-    enumSchema(["inference:models:read", "inference:invoke"]),
+    enumSchema([
+      "organization:read",
+      "organization:write",
+      "inference:read",
+      "inference:write",
+      "inference:invoke",
+      "agents:read",
+      "agents:write",
+      "sessions:read",
+      "sessions:write",
+      "tools:read",
+      "tools:write"
+    ]),
     "Capability granted to an API token."
   ),
   ApiToken: objectSchema({
@@ -316,7 +330,7 @@ const schemas: Record<string, JsonSchema> = {
     createdAt: describeSchema(stringSchema("date-time"), "Creation timestamp.")
   }, ["id", "organizationId", "name", "prefix", "scopes", "createdByUserId", "expiresAt", "lastUsedAt", "revokedAt", "createdAt"], "Organization-scoped API token metadata. The secret is never returned here."),
   ListApiTokensResponse: objectSchema({
-    tokens: describeSchema(arraySchema(ref("ApiToken")), "Organization API tokens, including revoked tokens.")
+    tokens: describeSchema(arraySchema(ref("ApiToken")), "Active and expired organization API tokens. Revoked tokens are omitted.")
   }, ["tokens"], "API tokens visible to an organization admin."),
   CreateApiTokenRequest: objectSchema({
     name: describeSchema(stringSchema(undefined, 1, 100), "Human-readable token name."),
@@ -1034,7 +1048,7 @@ const pathParameterDescriptions: Record<string, string> = {
 
 const fullDocument = createOpenApiDocument("Lush API", apiSpec.routes);
 const groupedDocuments = Object.fromEntries(
-  ["auth", "tokens", "inference", "sessions", "runs", "agents", "health"].map((group) => [
+  ["auth", "tokens", "inference", "sessions", "runs", "agents", "tools", "health"].map((group) => [
     group,
     createOpenApiDocument(
       `${titleCase(group)} API`,
@@ -1089,6 +1103,9 @@ function createOpenApiDocument(
 
   for (const route of routes) {
     const docs = operationDocs[route.id];
+    const apiTokenScope = canonicalApiTokenActionScopes[
+      route.id as keyof typeof canonicalApiTokenActionScopes
+    ];
     const path = openApiPath(route.path);
     document.paths[path] ??= {};
     document.paths[path][route.method.toLowerCase()] = {
@@ -1097,6 +1114,9 @@ function createOpenApiDocument(
       operationId: route.id,
       tags: [forcedTag ?? routeGroup(route.path)],
       ...(route.auth ? { security: [{ bearerAuth: [] }] } : {}),
+      ...(apiTokenScope
+        ? { "x-lush-api-token-scope": apiTokenScope }
+        : {}),
       ...operationParameters(route.path, route.id),
       ...requestBody(route),
       responses: responses(route)
@@ -1413,6 +1433,7 @@ function tagDescription(tag: string) {
     inference: "Organization-scoped inference configuration and OpenAI-compatible model-routing routes.",
     tokens: "Organization API credential lifecycle and scope management routes.",
     agents: "Agent runtime invocation routes.",
+    tools: "Tool gateway configuration, discovery, invocation, and approval routes.",
     health: "Service health and route discovery routes."
   };
 

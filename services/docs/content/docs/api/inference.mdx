@@ -12,8 +12,8 @@ The organization inference service also exposes an OpenAI-compatible base URL:
 https://<lush-api>/v1beta/inference/v1
 ```
 
-Create a top-level API token with `inference:models:read` and/or
-`inference:invoke`, then use its one-time secret as the OpenAI API key. An
+Create a top-level API token with `inference:read` and/or `inference:invoke`,
+then use its one-time secret as the OpenAI API key. An
 interactive Lush access token also works. List models first and pass the
 returned organization-scoped model ID to Chat Completions, Responses, or
 Embeddings. Lush routes the call with the selected provider credential and

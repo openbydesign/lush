@@ -35,6 +35,7 @@ import {
 import {
   AuthError,
   type AuthzAction,
+  authorizeApiToken,
   authorizePrincipal,
   apiTokenHasScope,
   bearerToken,
@@ -396,7 +397,8 @@ function toolsPrincipal(principal: OrganizationPrincipal): ToolsPrincipal {
   return {
     userId: principal.userId,
     organizationId: principal.organizationId,
-    role: principal.role
+    role: principal.role,
+    tokenId: principal.tokenId
   };
 }
 
@@ -622,6 +624,7 @@ app.get(routePath("fetchSession"), async (c) => {
     return authorized.response;
   }
 
+  if (!("session" in authorized.auth)) return unauthorized(c);
   return c.json(authorized.auth.session);
 });
 
@@ -1039,7 +1042,7 @@ app.get(routePath("listOpenAICompatibleModels"), async (c) => {
   const authorized = await authenticateOpenAICompatible(
     c,
     "listOpenAICompatibleModels",
-    "inference:models:read"
+    "inference:read"
   );
   if ("response" in authorized) return authorized.response;
 
@@ -1058,7 +1061,7 @@ app.get(routePath("retrieveOpenAICompatibleModel"), async (c) => {
   const authorized = await authenticateOpenAICompatible(
     c,
     "retrieveOpenAICompatibleModel",
-    "inference:models:read"
+    "inference:read"
   );
   if ("response" in authorized) return authorized.response;
 
@@ -2018,6 +2021,19 @@ async function authenticateRefresh(request: Request) {
 }
 
 async function authenticateAuthorized(c: Context, action: AuthzAction) {
+  const bearer = bearerToken(c.req.raw);
+  if (bearer?.startsWith("sk_")) {
+    const principal = await resolveApiToken(bearer);
+    if (!principal) return { response: unauthorized(c) };
+
+    try {
+      authorizeApiToken(principal, action);
+      return { auth: { principal } };
+    } catch (error) {
+      return { response: handleAuthError(c, error, "Not authorized") };
+    }
+  }
+
   const auth = await authenticateAccess(c.req.raw);
   if (!auth) {
     return { response: unauthorized(c) };
@@ -2036,7 +2052,7 @@ async function authenticateAuthorized(c: Context, action: AuthzAction) {
 async function authenticateOpenAICompatible(
   c: Context,
   action: AuthzAction,
-  scope: "inference:models:read" | "inference:invoke"
+  scope: "inference:read" | "inference:invoke"
 ) {
   const bearer = bearerToken(c.req.raw);
   if (!bearer) {

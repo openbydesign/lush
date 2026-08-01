@@ -13,6 +13,7 @@ import type {
 export type SessionPrincipal = {
   userId: string;
   organizationId: string;
+  tokenId?: string;
 };
 
 export type SessionSummary = {
@@ -1402,7 +1403,10 @@ async function recordSessionEvent(
       action: event.action,
       targetType: event.targetType ?? "session_thread",
       targetId: event.targetId,
-      metadata: event.metadata,
+      metadata: {
+        ...event.metadata,
+        ...(principal.tokenId ? { apiTokenId: principal.tokenId } : {})
+      },
       createdAt: new Date()
     })
     .execute();

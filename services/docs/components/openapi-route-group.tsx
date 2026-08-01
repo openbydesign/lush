@@ -31,6 +31,7 @@ type Operation = {
   operationId?: string;
   tags?: string[];
   security?: Array<Record<string, string[]>>;
+  "x-lush-api-token-scope"?: string;
   parameters?: Array<{
     name: string;
     in: "path" | "query" | "header" | "cookie";
@@ -131,8 +132,15 @@ export function OpenApiRouteGroup({ spec }: OpenApiRouteGroupProps) {
             </a>
             {operation.security ? (
               <span className="rounded-md border border-fd-border px-2 py-1 text-xs text-fd-muted-foreground">
-                Bearer token
+                {operation["x-lush-api-token-scope"]
+                  ? "Bearer JWT or API token"
+                  : "Bearer JWT"}
               </span>
+            ) : null}
+            {operation["x-lush-api-token-scope"] ? (
+              <code className="rounded-md border border-fd-border px-2 py-1 text-xs text-fd-muted-foreground">
+                {operation["x-lush-api-token-scope"]}
+              </code>
             ) : null}
           </div>
 

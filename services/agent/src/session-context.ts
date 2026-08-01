@@ -12,6 +12,7 @@ export { mergeSessionMessages } from "./message-merge";
 export type SessionPrincipal = {
   userId: string;
   organizationId: string;
+  tokenId?: string;
 };
 
 const maxProjectPromptContextBytes = 48 * 1024;

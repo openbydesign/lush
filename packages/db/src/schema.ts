@@ -150,8 +150,17 @@ export type AuthActionTokensTable = {
 };
 
 export type ApiTokenScope =
-  | "inference:models:read"
-  | "inference:invoke";
+  | "organization:read"
+  | "organization:write"
+  | "inference:read"
+  | "inference:write"
+  | "inference:invoke"
+  | "agents:read"
+  | "agents:write"
+  | "sessions:read"
+  | "sessions:write"
+  | "tools:read"
+  | "tools:write";
 
 export type ApiTokensTable = {
   id: Generated<string>;

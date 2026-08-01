@@ -30,6 +30,7 @@
             "bearerAuth": []
           }
         ],
+        "x-lush-api-token-scope": "sessions:read",
         "responses": {
           "200": {
             "description": "Owned session summaries.",
@@ -74,6 +75,7 @@
             "bearerAuth": []
           }
         ],
+        "x-lush-api-token-scope": "sessions:write",
         "requestBody": {
           "required": true,
           "description": "Agent identifier and optional title.",
@@ -131,6 +133,7 @@
             "bearerAuth": []
           }
         ],
+        "x-lush-api-token-scope": "sessions:read",
         "parameters": [
           {
             "name": "sessionId",
@@ -186,6 +189,7 @@
             "bearerAuth": []
           }
         ],
+        "x-lush-api-token-scope": "sessions:write",
         "parameters": [
           {
             "name": "sessionId",
@@ -254,6 +258,7 @@
             "bearerAuth": []
           }
         ],
+        "x-lush-api-token-scope": "sessions:write",
         "parameters": [
           {
             "name": "sessionId",
@@ -322,6 +327,7 @@
             "bearerAuth": []
           }
         ],
+        "x-lush-api-token-scope": "sessions:write",
         "parameters": [
           {
             "name": "sessionId",
@@ -390,6 +396,7 @@
             "bearerAuth": []
           }
         ],
+        "x-lush-api-token-scope": "sessions:write",
         "parameters": [
           {
             "name": "sessionId",
@@ -458,6 +465,7 @@
             "bearerAuth": []
           }
         ],
+        "x-lush-api-token-scope": "sessions:write",
         "parameters": [
           {
             "name": "sessionId",
@@ -526,6 +534,7 @@
             "bearerAuth": []
           }
         ],
+        "x-lush-api-token-scope": "sessions:read",
         "responses": {
           "200": {
             "description": "Session-state settings.",
@@ -570,6 +579,7 @@
             "bearerAuth": []
           }
         ],
+        "x-lush-api-token-scope": "sessions:write",
         "requestBody": {
           "required": true,
           "description": "Session-state settings to update.",
@@ -627,6 +637,7 @@
             "bearerAuth": []
           }
         ],
+        "x-lush-api-token-scope": "agents:write",
         "parameters": [
           {
             "name": "sessionId",
@@ -1518,8 +1529,17 @@
       "ApiTokenScope": {
         "type": "string",
         "enum": [
-          "inference:models:read",
-          "inference:invoke"
+          "organization:read",
+          "organization:write",
+          "inference:read",
+          "inference:write",
+          "inference:invoke",
+          "agents:read",
+          "agents:write",
+          "sessions:read",
+          "sessions:write",
+          "tools:read",
+          "tools:write"
         ],
         "description": "Capability granted to an API token."
       },
@@ -1630,7 +1650,7 @@
             "items": {
               "$ref": "#/components/schemas/ApiToken"
             },
-            "description": "Organization API tokens, including revoked tokens."
+            "description": "Active and expired organization API tokens. Revoked tokens are omitted."
           }
         },
         "required": [
