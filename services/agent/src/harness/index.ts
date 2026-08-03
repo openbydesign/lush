@@ -33,6 +33,18 @@ export {
   type SubprocessProviderOptions
 } from "./subprocess";
 export {
+  RemoteIsolationProvider,
+  RemoteIsolationTimeoutError,
+  RemoteIsolationOutputLimitError,
+  type RemoteIsolationProviderOptions
+} from "./remote";
+export {
+  configuredIsolationRuntime,
+  createIsolationProvider,
+  type IsolationProviderKind,
+  type IsolationRuntimeConfig
+} from "./provider";
+export {
   createGatewayExecutor,
   toolResultContentFromResult,
   type ThirdPartyExecutor,

@@ -36,6 +36,24 @@ export type HarnessResponse =
   | { type: "outputs"; messages: Message[] }
   | { type: "end"; state: State; error?: HarnessError };
 
+export function parseHarnessResponse(line: string): HarnessResponse {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(line);
+  } catch {
+    throw new Error(`Harness emitted a non-JSON frame: ${line.slice(0, 200)}`);
+  }
+  if (
+    parsed &&
+    typeof parsed === "object" &&
+    ((parsed as { type?: unknown }).type === "outputs" ||
+      (parsed as { type?: unknown }).type === "end")
+  ) {
+    return parsed as HarnessResponse;
+  }
+  throw new Error("Harness emitted a frame with an unknown type");
+}
+
 /**
  * The runtime seam. Mirrors AX `rpc Connect(stream HarnessRequest) returns
  * (stream HarnessResponse)`. An implementation must terminate the stream with an

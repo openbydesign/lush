@@ -72,6 +72,19 @@ response buffering policy, public exposure, and any shared rate limits.
 The Tauri app is intentionally different: it is not served from a browser
 origin and still requires an explicit `VITE_LUSH_API_BASE_URL` at build time.
 
+### `lush-sandbox`
+
+`ghcr.io/openbydesign/lush-sandbox:<version>` is the managed-agent harness image
+for remote isolation providers. It is based on the version-matched Cloudflare
+Sandbox runtime, preserves that runtime's control-plane entrypoint, and ships
+the Lush harness under `/opt/lush`. It is not a public API service and accepts
+no provider, database, model, or connector credentials.
+
+Deployments must select it by digest, run only a baked harness ID, and broker
+short-lived run capabilities across an authenticated control plane. The first
+published image is `linux/amd64` because the pinned provider base image is
+single-architecture.
+
 ### Static `lush-web` distribution
 
 `lush-web-dist-<version>.tar.gz` contains the same Vite output as the web image,
@@ -108,13 +121,15 @@ and availability checks.
 
 For a single release:
 
-1. Resolve the API image and chosen web artifact to the same exact version or
-   recorded digests.
-2. Run the API image's migration command once with deployment-level locking.
-3. Roll out the API image and wait for `/health`.
-4. Roll out the web image or verified static distribution and verify its SPA,
+1. Resolve the API, sandbox, and chosen web artifact to the same exact version
+   or recorded digests.
+2. Roll out the sandbox image without product traffic and verify its digest.
+3. Run the API image's migration command once with deployment-level locking.
+4. Roll out the API image and wait for `/health`.
+5. Roll out the web image or verified static distribution and verify its SPA,
    runtime config, and API routing.
-5. Record the Git tag, image digests, and migration result in the deployment.
+6. Qualify a sandboxed agent run, then record the Git tag, image digests, and
+   migration result in the deployment.
 
 Do not run migrations implicitly in every API replica. A distinct migration
 job makes failure, locking, and rollout ordering observable in both managed and
@@ -124,8 +139,10 @@ self-hosted environments.
 
 ```sh
 docker build -f containers/api/Dockerfile -t lush-api:local .
+docker build -f containers/sandbox/Dockerfile -t lush-sandbox:local .
 docker build -f containers/web/Dockerfile -t lush-web:local .
 ```
 
-Pull requests build both images without publishing them. Release builds target
-both `linux/amd64` and `linux/arm64` and publish to GHCR.
+Pull requests build every image without publishing it. Release builds publish
+the API and web images for `linux/amd64` and `linux/arm64`, and the sandbox
+image for `linux/amd64`.
