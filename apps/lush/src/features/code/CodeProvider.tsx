@@ -1,6 +1,7 @@
 import type {
   CodeSession,
   CodeSessionDraft,
+  EventPage,
   CodeSessionSummary,
   CodeSidecarConnection,
   CodeReview,
@@ -15,10 +16,15 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useReducer,
   useRef,
   useState,
   type ReactNode
 } from "react";
+import {
+  applyCodeSessionEventPage,
+  createCodeSessionPoll
+} from "../../lib/code-session-poll";
 
 type CodeAvailability = "loading" | "ready" | "unavailable" | "error";
 
@@ -49,6 +55,10 @@ export function CodeProvider({ children }: { children: ReactNode }) {
   const [harnesses, setHarnesses] = useState<HarnessInstallation[]>([]);
   const [sessions, setSessions] = useState<CodeSessionSummary[]>([]);
   const [activeSession, setActiveSession] = useState<CodeSession>();
+  const [activeSessionGeneration, bumpActiveSessionGeneration] = useReducer(
+    (value: number) => value + 1,
+    0
+  );
   const activeSessionIdRef = useRef<string | undefined>(undefined);
 
   const request = useCallback(async <Result,>(path: string, init?: RequestInit) => {
@@ -85,10 +95,14 @@ export function CodeProvider({ children }: { children: ReactNode }) {
     activeSessionIdRef.current = id;
     if (!id) {
       setActiveSession(undefined);
+      bumpActiveSessionGeneration();
       return;
     }
     const session = await request<CodeSession>(`/v1/sessions/${id}`);
-    if (activeSessionIdRef.current === id) setActiveSession(session);
+    if (activeSessionIdRef.current === id) {
+      setActiveSession(session);
+      bumpActiveSessionGeneration();
+    }
   }, [request]);
 
   useEffect(() => {
@@ -116,14 +130,28 @@ export function CodeProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!connection || !activeSession?.id || activeSession.status !== "running") return;
     const id = activeSession.id;
-    const timer = window.setInterval(() => {
-      void request<CodeSession>(`/v1/sessions/${id}`).then((session) => {
-        if (activeSessionIdRef.current === id) setActiveSession(session);
-        if (session.status !== "running") void refresh();
-      }).catch((reason) => setError(reason instanceof Error ? reason.message : String(reason)));
-    }, 500);
-    return () => window.clearInterval(timer);
-  }, [activeSession?.id, activeSession?.status, connection, refresh, request]);
+    const poll = createCodeSessionPoll({
+      initialCursor: activeSession.events.at(-1)?.sequence ?? 0,
+      request: (cursor) => request<EventPage>(`/v1/sessions/${id}/events?after=${cursor}`),
+      update: (page) => {
+        setActiveSession((current) => applyCodeSessionEventPage(current, id, page));
+        if (page.status !== "running") void refresh();
+      },
+      onError: (reason) => setError(reason instanceof Error ? reason.message : String(reason))
+    });
+    const timer = window.setInterval(() => { void poll.tick(); }, 500);
+    return () => {
+      poll.stop();
+      window.clearInterval(timer);
+    };
+  }, [
+    activeSession?.id,
+    activeSession?.status,
+    activeSessionGeneration,
+    connection,
+    refresh,
+    request
+  ]);
 
   const value = useMemo<CodeContextValue>(() => ({
     availability,
@@ -147,6 +175,7 @@ export function CodeProvider({ children }: { children: ReactNode }) {
       });
       activeSessionIdRef.current = session.id;
       setActiveSession(session);
+      bumpActiveSessionGeneration();
       await refresh();
       return session;
     },
@@ -158,6 +187,7 @@ export function CodeProvider({ children }: { children: ReactNode }) {
         body: JSON.stringify({ input })
       });
       setActiveSession(session);
+      bumpActiveSessionGeneration();
     },
     async interrupt() {
       if (!activeSessionIdRef.current) return;
@@ -168,6 +198,7 @@ export function CodeProvider({ children }: { children: ReactNode }) {
       if (activeSessionIdRef.current === id) {
         activeSessionIdRef.current = undefined;
         setActiveSession(undefined);
+        bumpActiveSessionGeneration();
       }
       await refresh();
     },
