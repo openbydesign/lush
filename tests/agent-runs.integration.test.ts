@@ -222,6 +222,24 @@ if (!databaseUrl) {
         .rejects.toMatchObject({ code: "session_run_in_progress", status: 409 });
     });
 
+    test("defers runs assigned to a different isolation provider", async () => {
+      const { principal, sessionId } = await seedSession();
+      const created = await createAgentRun(
+        principal,
+        sessionId,
+        runRequest("provider-affinity", "hold")
+      );
+      await getDb().updateTable("agentRuns").set({ isolationProvider: "remote" })
+        .where("id", "=", created.run.id).execute();
+
+      await executeAgentRun(created.run.id);
+
+      const run = await getDb().selectFrom("agentRuns")
+        .select(["status", "leaseOwner"])
+        .where("id", "=", created.run.id).executeTakeFirstOrThrow();
+      expect(run).toMatchObject({ status: "queued", leaseOwner: null });
+    });
+
     test("binds access to the owning organization member", async () => {
       const { principal, sessionId } = await seedSession();
       const created = await createAgentRun(principal, sessionId, runRequest("owner", "secret"));

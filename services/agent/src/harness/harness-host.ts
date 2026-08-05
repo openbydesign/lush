@@ -16,6 +16,7 @@ import { readFile } from "node:fs/promises";
 import { textMessage } from "./content";
 import { brokeredLushHarness, echoHarness } from "./harnesses";
 import type { Harness, HarnessResponse, HarnessStart } from "./protocol";
+import { containedWorkspacePath } from "./workspace-path";
 
 /**
  * Reports whether a sensitive host env var leaked into the sandbox. Reads go
@@ -76,10 +77,7 @@ async function readStdin(): Promise<string> {
 
 async function readStartPayload(path: string | undefined): Promise<string> {
   if (!path) return readStdin();
-  if (!path.startsWith("/workspace/") || path.includes("/../")) {
-    throw new Error("Harness input must be a contained workspace path");
-  }
-  return readFile(path, "utf8");
+  return readFile(containedWorkspacePath(path), "utf8");
 }
 
 function write(frame: HarnessResponse): void {

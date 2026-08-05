@@ -85,6 +85,14 @@ short-lived run capabilities across an authenticated control plane. The first
 published image is `linux/amd64` because the pinned provider base image is
 single-architecture.
 
+`LUSH_SANDBOX_BROKER_BASE_URL` must be executor-affine: every broker request
+for a run must reach the API process that owns its execution lease. A
+single-instance deployment satisfies this directly; a multi-replica deployment
+must route the run-ID broker path to its lease owner. If that process exits,
+the active broker stream ends and normal lease recovery creates a new broker
+context and capability token. Deployments must not retry an old token against
+an arbitrary replica.
+
 ### Static `lush-web` distribution
 
 `lush-web-dist-<version>.tar.gz` contains the same Vite output as the web image,

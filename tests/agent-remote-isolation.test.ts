@@ -9,6 +9,11 @@ import {
   type EnvironmentSpec,
   type ExecResponse
 } from "../services/agent/src/harness";
+import {
+  configuredIsolationRuntime,
+  createIsolationProvider
+} from "../services/agent/src/harness/provider";
+import { containedWorkspacePath } from "../services/agent/src/harness/workspace-path";
 
 const token = "remote-isolation-token-that-is-long-enough";
 
@@ -129,5 +134,49 @@ describe("RemoteIsolationProvider", () => {
       baseUrl: "https://sandbox.example.com",
       apiToken: "weak"
     })).toThrow("at least 32 characters");
+  });
+
+  test("validates the complete remote runtime before creating a provider", () => {
+    const baseEnv = {
+      LUSH_ISOLATION_PROVIDER: "remote",
+      LUSH_SANDBOX_CONTROL_URL: "https://sandbox.internal/control",
+      LUSH_SANDBOX_CONTROL_TOKEN: token,
+      LUSH_SANDBOX_IMAGE_DIGEST: `sha256:${"a".repeat(64)}`,
+      LUSH_SANDBOX_BROKER_BASE_URL: "https://api.internal/v1beta/internal/agent-runs"
+    };
+    const runtime = configuredIsolationRuntime(baseEnv);
+    expect(runtime).toMatchObject({
+      kind: "remote",
+      sandboxControlUrl: baseEnv.LUSH_SANDBOX_CONTROL_URL,
+      sandboxControlToken: token
+    });
+    expect(createIsolationProvider(runtime)).toBeInstanceOf(RemoteIsolationProvider);
+
+    expect(() => configuredIsolationRuntime({
+      ...baseEnv,
+      LUSH_SANDBOX_CONTROL_URL: "http://sandbox.example.com"
+    })).toThrow("must use HTTPS");
+    expect(() => configuredIsolationRuntime({
+      ...baseEnv,
+      LUSH_SANDBOX_CONTROL_TOKEN: "weak"
+    })).toThrow("at least 32 characters");
+  });
+});
+
+describe("remote harness workspace input", () => {
+  test("rejects every parent-directory segment", () => {
+    expect(containedWorkspacePath("/workspace/input.json")).toBe(
+      "/workspace/input.json"
+    );
+    for (const path of [
+      "/workspace/..",
+      "/workspace/input/..",
+      "/workspace/../input.json",
+      "/tmp/input.json"
+    ]) {
+      expect(() => containedWorkspacePath(path)).toThrow(
+        "contained workspace path"
+      );
+    }
   });
 });

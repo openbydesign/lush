@@ -65,9 +65,11 @@ export function scheduleAgentRunExecution(runId: string): Promise<void> {
 }
 
 export async function recoverAgentRuns(): Promise<number> {
+  const isolation = configuredIsolationRuntime();
   const now = new Date();
   const rows = await getDb().selectFrom("agentRuns")
     .select("id")
+    .where("isolationProvider", "=", isolation.kind)
     .where((eb) => eb.or([
       eb("status", "=", "queued"),
       eb.and([
@@ -97,7 +99,8 @@ export function startAgentRunRecoveryLoop(intervalMs = 30_000): () => void {
 }
 
 export async function executeAgentRun(runId: string): Promise<void> {
-  const claimed = await claimRun(runId);
+  const isolation = configuredIsolationRuntime();
+  const claimed = await claimRun(runId, isolation.kind);
   if (!claimed) return;
 
   const configuration = parseRunConfiguration(claimed.run.configuration);
@@ -128,13 +131,6 @@ export async function executeAgentRun(runId: string): Promise<void> {
       return;
     }
     const capabilityToken = `${crypto.randomUUID()}${crypto.randomUUID()}`;
-    const isolation = configuredIsolationRuntime();
-    const isolationKind = runIsolationProvider(claimed.run.isolationProvider);
-    if (isolation.kind !== isolationKind) {
-      throw new Error(
-        `Run requires isolation provider ${isolationKind}, but ${isolation.kind} is configured`
-      );
-    }
     broker = startInferenceBroker(
       claimed,
       configuration,
@@ -142,9 +138,9 @@ export async function executeAgentRun(runId: string): Promise<void> {
       capabilityToken,
       controller.signal,
       activeExecutionClock,
-      isolation.sandboxBrokerBaseUrl
+      isolation.kind === "remote" ? isolation.sandboxBrokerBaseUrl : undefined
     );
-    provider = createIsolationProvider(isolationKind, { activeExecutionClock });
+    provider = createIsolationProvider(isolation, { activeExecutionClock });
     environment = await provider.provision({
       environmentId: claimed.run.environmentId,
       profile: "chat",
@@ -299,11 +295,16 @@ class PostgresRunEventLog implements EventLog {
   }
 }
 
-async function claimRun(runId: string): Promise<ClaimedRun | null> {
+async function claimRun(
+  runId: string,
+  isolationProvider: IsolationProviderKind
+): Promise<ClaimedRun | null> {
   const db = getDb();
   return db.transaction().execute(async (trx) => {
     const run = await trx.selectFrom("agentRuns").selectAll()
-      .where("id", "=", runId).forUpdate().executeTakeFirst();
+      .where("id", "=", runId)
+      .where("isolationProvider", "=", isolationProvider)
+      .forUpdate().executeTakeFirst();
     if (!run || isTerminalRunStatus(run.status)) return null;
     const now = new Date();
     const recovering = run.status === "running" || run.status === "waiting_for_approval";
@@ -539,11 +540,6 @@ async function inferenceBrokerResponse(
       "cache-control": "no-store"
     }
   });
-}
-
-function runIsolationProvider(value: string): IsolationProviderKind {
-  if (value === "subprocess" || value === "remote") return value;
-  throw new Error(`Unsupported isolation provider: ${value}`);
 }
 
 export function nextBrokerEventOrHeartbeat<T>(
