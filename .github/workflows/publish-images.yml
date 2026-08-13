@@ -182,9 +182,9 @@ jobs:
           - image: lush-web
             dockerfile: containers/web/Dockerfile
             platforms: linux/amd64,linux/arm64
-          - image: lush-sandbox
-            dockerfile: containers/sandbox/Dockerfile
-            platforms: linux/amd64
+          - image: lush-harness
+            dockerfile: containers/harness/Dockerfile
+            platforms: linux/amd64,linux/arm64
 
     steps:
       - name: Check out release

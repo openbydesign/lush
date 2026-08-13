@@ -104,8 +104,8 @@ and agent services.
 
 ## Deployment and releases
 
-Lush publishes version-matched API, browser-app, and managed-sandbox container
-images. See the [self-hosting guide](services/docs/content/docs/setup/self-hosting.mdx)
+Lush publishes version-matched API, browser-app, and provider-neutral agent
+harness images. See the [self-hosting guide](services/docs/content/docs/setup/self-hosting.mdx)
 for an end-to-end single-host deployment, email-provider integration, and the
 external-auth extension boundary. [Deployment artifacts](docs/deployment.md)
 defines the image runtime contract, and [Releases](docs/releases.md) defines the

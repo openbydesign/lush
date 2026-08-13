@@ -87,9 +87,9 @@ images:
 - `ghcr.io/openbydesign/lush-api:<version>`
 - `ghcr.io/openbydesign/lush-web:<version>`
 
-It also publishes `ghcr.io/openbydesign/lush-sandbox:<version>` for
-`linux/amd64`, matching the architecture supported by the pinned Cloudflare
-Sandbox base image.
+It also publishes the provider-neutral managed-agent runtime:
+
+- `ghcr.io/openbydesign/lush-harness:<version>`
 
 Stable releases also update `latest`. Prereleases do not. Production and
 managed deployments should pin an exact version or, preferably, the published
@@ -139,7 +139,8 @@ the commit resolved from the immutable release tag instead.
 
 ## Release scope
 
-The release workflow publishes only artifacts that are real deployment units
-today. The API embeds the agent coordinator, while `lush-sandbox` packages only
-the unprivileged harness runtime used behind a provider isolation boundary.
-There is no standalone `lush-agent` service image.
+The release workflow publishes only artifacts that are real runtime inputs
+today. The API embeds the agent coordinator, while `lush-harness` packages the
+unprivileged, provider-neutral harness used behind an isolation boundary.
+Provider deployments own their SDK-specific final sandbox images. There is no
+standalone `lush-agent` service image.

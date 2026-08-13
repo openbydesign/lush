@@ -100,8 +100,8 @@ jobs:
             dockerfile: containers/api/Dockerfile
           - image: lush-web
             dockerfile: containers/web/Dockerfile
-          - image: lush-sandbox
-            dockerfile: containers/sandbox/Dockerfile
+          - image: lush-harness
+            dockerfile: containers/harness/Dockerfile
 
     steps:
       - name: Check out repository
