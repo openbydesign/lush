@@ -70,6 +70,8 @@ export const defaultEnvironmentLimits: EnvironmentLimits = {
 };
 
 export type EnvironmentSpec = {
+  /** Durable Lush environment identity. Providers derive opaque backend handles from it. */
+  environmentId: string;
   profile: EnvironmentProfile;
   organizationId: string;
   ownerUserId: string;

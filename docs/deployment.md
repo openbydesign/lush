@@ -72,6 +72,28 @@ response buffering policy, public exposure, and any shared rate limits.
 The Tauri app is intentionally different: it is not served from a browser
 origin and still requires an explicit `VITE_LUSH_API_BASE_URL` at build time.
 
+### `lush-harness`
+
+`ghcr.io/openbydesign/lush-harness:<version>` is the provider-neutral
+managed-agent harness image. It ships the version-matched harness under
+`/opt/lush` with `harness-host.ts` as its entrypoint. Provider repositories may
+run it directly or copy its immutable payload into a provider-specific runtime
+image. It is not a public API service and accepts no provider, database, model,
+or connector credentials.
+
+Deployments must select it by digest, run only an approved harness ID, and
+broker short-lived run capabilities across an authenticated control plane.
+Provider SDKs, base images, network policy, and final sandbox image publication
+belong to the provider deployment rather than this repository.
+
+`LUSH_SANDBOX_BROKER_BASE_URL` must be executor-affine: every broker request
+for a run must reach the API process that owns its execution lease. A
+single-instance deployment satisfies this directly; a multi-replica deployment
+must route the run-ID broker path to its lease owner. If that process exits,
+the active broker stream ends and normal lease recovery creates a new broker
+context and capability token. Deployments must not retry an old token against
+an arbitrary replica.
+
 ### Static `lush-web` distribution
 
 `lush-web-dist-<version>.tar.gz` contains the same Vite output as the web image,
@@ -108,13 +130,16 @@ and availability checks.
 
 For a single release:
 
-1. Resolve the API image and chosen web artifact to the same exact version or
-   recorded digests.
-2. Run the API image's migration command once with deployment-level locking.
-3. Roll out the API image and wait for `/health`.
-4. Roll out the web image or verified static distribution and verify its SPA,
+1. Resolve the API, harness, and chosen web artifact to the same exact version
+   or recorded digests.
+2. Build or select the provider sandbox from the exact harness digest and roll
+   it out without product traffic.
+3. Run the API image's migration command once with deployment-level locking.
+4. Roll out the API image and wait for `/health`.
+5. Roll out the web image or verified static distribution and verify its SPA,
    runtime config, and API routing.
-5. Record the Git tag, image digests, and migration result in the deployment.
+6. Qualify a sandboxed agent run, then record the Git tag, image digests, and
+   migration result in the deployment.
 
 Do not run migrations implicitly in every API replica. A distinct migration
 job makes failure, locking, and rollout ordering observable in both managed and
@@ -124,8 +149,9 @@ self-hosted environments.
 
 ```sh
 docker build -f containers/api/Dockerfile -t lush-api:local .
+docker build -f containers/harness/Dockerfile -t lush-harness:local .
 docker build -f containers/web/Dockerfile -t lush-web:local .
 ```
 
-Pull requests build both images without publishing them. Release builds target
-both `linux/amd64` and `linux/arm64` and publish to GHCR.
+Pull requests build every image without publishing it. Release builds publish
+the API, harness, and web images for `linux/amd64` and `linux/arm64`.

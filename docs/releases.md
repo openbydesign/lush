@@ -38,7 +38,7 @@ messages on `main`:
 Merging the release pull request updates `package.json` and `CHANGELOG.md`,
 creates the matching `vMAJOR.MINOR.PATCH` tag, and creates a draft GitHub
 Release. The same workflow validates that tag, attaches the static browser
-distribution, publishes both OCI images, and only then publishes the GitHub
+distribution, publishes every OCI image, and only then publishes the GitHub
 Release. Repositories with immutable releases enabled require this ordering:
 published releases cannot accept new or replacement assets.
 
@@ -63,7 +63,7 @@ Before the first public release:
 
 1. Add `RELEASE_PLEASE_TOKEN` and require the test, image-build, and
    `Build lush-web distribution` checks on the release pull request.
-2. Confirm the two GHCR packages inherit public visibility from this public
+2. Confirm the GHCR packages inherit public visibility from this public
    repository, or make them public after their first publication.
 
 If artifact or image publication fails, the GitHub Release remains a draft;
@@ -81,10 +81,15 @@ from the requested tag commit. A release tag must never move to another commit.
 
 ## Published artifacts
 
-Each release publishes multi-platform `linux/amd64` and `linux/arm64` images:
+Each release publishes these multi-platform `linux/amd64` and `linux/arm64`
+images:
 
 - `ghcr.io/openbydesign/lush-api:<version>`
 - `ghcr.io/openbydesign/lush-web:<version>`
+
+It also publishes the provider-neutral managed-agent runtime:
+
+- `ghcr.io/openbydesign/lush-harness:<version>`
 
 Stable releases also update `latest`. Prereleases do not. Production and
 managed deployments should pin an exact version or, preferably, the published
@@ -134,7 +139,8 @@ the commit resolved from the immutable release tag instead.
 
 ## Release scope
 
-The release workflow publishes only artifacts that are real deployment units
-today. The API currently embeds the agent runtime, so there is no standalone
-`lush-agent` image. Add a separately versioned image only when that service is
-actually split across a network boundary.
+The release workflow publishes only artifacts that are real runtime inputs
+today. The API embeds the agent coordinator, while `lush-harness` packages the
+unprivileged, provider-neutral harness used behind an isolation boundary.
+Provider deployments own their SDK-specific final sandbox images. There is no
+standalone `lush-agent` service image.

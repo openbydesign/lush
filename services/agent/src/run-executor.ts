@@ -11,8 +11,16 @@ import { textMessage, type Message } from "./harness/content";
 import type { EventLog, ConversationEvent } from "./harness/protocol";
 import { runExec } from "./harness/orchestrator";
 import { InFlightRegistry } from "./harness/event-log";
-import { ActiveExecutionClock } from "./harness/isolation";
-import { SubprocessIsolationProvider } from "./harness/subprocess";
+import {
+  ActiveExecutionClock,
+  type AgentEnvironmentHandle,
+  type IsolationProvider
+} from "./harness/isolation";
+import {
+  configuredIsolationRuntime,
+  createIsolationProvider,
+  type IsolationProviderKind
+} from "./harness/provider";
 import {
   AgentRunError,
   appendRunEvent,
@@ -32,7 +40,10 @@ const brokerHeartbeatMs = 5_000;
 export const agentToolExecutionTimeoutMs = 35_000;
 const executions = new Map<string, Promise<void>>();
 const inFlight = new InFlightRegistry();
-type LocalBroker = { port: number; stop(closeActiveConnections?: boolean): void };
+type InferenceBroker = {
+  url: string;
+  stop(closeActiveConnections?: boolean): void;
+};
 
 type ClaimedRun = {
   run: AgentRunRow;
@@ -54,9 +65,11 @@ export function scheduleAgentRunExecution(runId: string): Promise<void> {
 }
 
 export async function recoverAgentRuns(): Promise<number> {
+  const isolation = configuredIsolationRuntime();
   const now = new Date();
   const rows = await getDb().selectFrom("agentRuns")
     .select("id")
+    .where("isolationProvider", "=", isolation.kind)
     .where((eb) => eb.or([
       eb("status", "=", "queued"),
       eb.and([
@@ -86,16 +99,17 @@ export function startAgentRunRecoveryLoop(intervalMs = 30_000): () => void {
 }
 
 export async function executeAgentRun(runId: string): Promise<void> {
-  const claimed = await claimRun(runId);
+  const isolation = configuredIsolationRuntime();
+  const claimed = await claimRun(runId, isolation.kind);
   if (!claimed) return;
 
   const configuration = parseRunConfiguration(claimed.run.configuration);
   const controller = new AbortController();
   const unregister = registerLocalRun(runId, controller);
   const stopLease = maintainLease(claimed, controller);
-  let provider: SubprocessIsolationProvider | undefined;
-  let environment: Awaited<ReturnType<SubprocessIsolationProvider["provision"]>> | undefined;
-  let broker: LocalBroker | undefined;
+  let provider: IsolationProvider | undefined;
+  let environment: AgentEnvironmentHandle | undefined;
+  let broker: InferenceBroker | undefined;
   let assistantText = "";
   const activeExecutionClock = new ActiveExecutionClock();
 
@@ -123,10 +137,12 @@ export async function executeAgentRun(runId: string): Promise<void> {
       capabilities,
       capabilityToken,
       controller.signal,
-      activeExecutionClock
+      activeExecutionClock,
+      isolation.kind === "remote" ? isolation.sandboxBrokerBaseUrl : undefined
     );
-    provider = new SubprocessIsolationProvider({ activeExecutionClock });
+    provider = createIsolationProvider(isolation, { activeExecutionClock });
     environment = await provider.provision({
+      environmentId: claimed.run.environmentId,
       profile: "chat",
       organizationId: claimed.run.organizationId,
       ownerUserId: claimed.run.initiatedByUserId,
@@ -152,7 +168,7 @@ export async function executeAgentRun(runId: string): Promise<void> {
         inputs: requestMessages,
         harnessId: "lush-brokered",
         harnessConfig: {
-          brokerUrl: `http://127.0.0.1:${broker.port}/inference`,
+          brokerUrl: broker.url,
           capabilityToken,
           configurationDigest: claimed.run.configurationDigest,
           configuration
@@ -279,11 +295,16 @@ class PostgresRunEventLog implements EventLog {
   }
 }
 
-async function claimRun(runId: string): Promise<ClaimedRun | null> {
+async function claimRun(
+  runId: string,
+  isolationProvider: IsolationProviderKind
+): Promise<ClaimedRun | null> {
   const db = getDb();
   return db.transaction().execute(async (trx) => {
     const run = await trx.selectFrom("agentRuns").selectAll()
-      .where("id", "=", runId).forUpdate().executeTakeFirst();
+      .where("id", "=", runId)
+      .where("isolationProvider", "=", isolationProvider)
+      .forUpdate().executeTakeFirst();
     if (!run || isTerminalRunStatus(run.status)) return null;
     const now = new Date();
     const recovering = run.status === "running" || run.status === "waiting_for_approval";
@@ -369,99 +390,156 @@ async function completedConversationText(runId: string) {
   return text;
 }
 
+type InferenceBrokerContext = {
+  claimed: ClaimedRun;
+  expectedConfiguration: AgentRunConfigurationV1;
+  capabilities: AgentRunCapabilitiesV1;
+  capabilityToken: string;
+  executionSignal: AbortSignal;
+  activeExecutionClock: ActiveExecutionClock;
+};
+
+const inferenceBrokers = new Map<string, InferenceBrokerContext>();
+
 function startInferenceBroker(
   claimed: ClaimedRun,
   expectedConfiguration: AgentRunConfigurationV1,
   capabilities: AgentRunCapabilitiesV1,
   capabilityToken: string,
   executionSignal: AbortSignal,
-  activeExecutionClock: ActiveExecutionClock
-): LocalBroker {
-  return Bun.serve({
+  activeExecutionClock: ActiveExecutionClock,
+  remoteBaseUrl?: string
+): InferenceBroker {
+  const context: InferenceBrokerContext = {
+    claimed,
+    expectedConfiguration,
+    capabilities,
+    capabilityToken,
+    executionSignal,
+    activeExecutionClock
+  };
+  if (remoteBaseUrl) {
+    inferenceBrokers.set(claimed.run.id, context);
+    return {
+      url: `${remoteBaseUrl.replace(/\/$/, "")}/${encodeURIComponent(
+        claimed.run.id
+      )}/inference`,
+      stop() {
+        if (inferenceBrokers.get(claimed.run.id) === context) {
+          inferenceBrokers.delete(claimed.run.id);
+        }
+      }
+    };
+  }
+
+  const server = Bun.serve({
     port: 0,
     hostname: "127.0.0.1",
-    async fetch(request) {
-      if (
-        request.method !== "POST" ||
-        new URL(request.url).pathname !== "/inference" ||
-        !constantTimeEqual(
-          request.headers.get("authorization") ?? "",
-          `Bearer ${capabilityToken}`
-        )
-      ) {
-        return new Response(null, { status: 403 });
-      }
-      const authorized = await isInferenceAuthorized(claimed);
-      if (!authorized) return new Response(null, { status: 403 });
-      const body = await request.json().catch(() => undefined) as
-        | { configurationDigest?: unknown; configuration?: unknown }
-        | undefined;
-      if (
-        body?.configurationDigest !== claimed.run.configurationDigest ||
-        await sha256Hex(canonicalJson(body.configuration)) !== claimed.run.configurationDigest ||
-        canonicalJson(body.configuration) !== canonicalJson(expectedConfiguration)
-      ) {
-        return new Response(null, { status: 409 });
-      }
+    fetch: (request) => inferenceBrokerResponse(context, request)
+  });
+  return {
+    url: `http://127.0.0.1:${server.port}/inference`,
+    stop: (closeActiveConnections) => server.stop(closeActiveConnections)
+  };
+}
 
-      const configuration = parseRunConfiguration(body.configuration);
-      const revoked = new AbortController();
-      const signal = AbortSignal.any([request.signal, executionSignal, revoked.signal]);
-      const stopAuthorizationMonitor = monitorInferenceAuthorization(
-        claimed,
-        revoked,
-        signal
-      );
-      const generator = streamRunToolLoop(
-        claimed,
-        configuration,
-        capabilities,
-        signal,
-        activeExecutionClock
-      );
-      const encoder = new TextEncoder();
-      return new Response(new ReadableStream({
-        async start(controller) {
-          try {
-            const iterator = generator[Symbol.asyncIterator]();
-            let pending = iterator.next();
-            while (true) {
-              const next = await nextBrokerEventOrHeartbeat(pending, brokerHeartbeatMs);
-              if (next.kind === "heartbeat") {
-                controller.enqueue(encoder.encode("\n"));
-                continue;
-              }
-              if (next.result.done) break;
-              controller.enqueue(encoder.encode(`${JSON.stringify(next.result.value)}\n`));
-              pending = iterator.next();
-            }
-            controller.close();
-          } catch (error) {
-            if (!signal.aborted) {
-              controller.error(error);
-            } else {
-              // A cancelled run intentionally tears down the broker stream.
-              // Do not surface that expected abort as an unhandled stream error.
-              try {
-                controller.close();
-              } catch {}
-            }
-          } finally {
-            stopAuthorizationMonitor();
+export async function handleAgentRunInferenceBroker(
+  runId: string,
+  request: Request
+) {
+  const context = inferenceBrokers.get(runId);
+  if (!context) return new Response(null, { status: 404 });
+  return inferenceBrokerResponse(context, request);
+}
+
+async function inferenceBrokerResponse(
+  context: InferenceBrokerContext,
+  request: Request
+) {
+  const {
+    claimed,
+    expectedConfiguration,
+    capabilities,
+    capabilityToken,
+    executionSignal,
+    activeExecutionClock
+  } = context;
+  if (
+    request.method !== "POST" ||
+    !constantTimeEqual(
+      request.headers.get("authorization") ?? "",
+      `Bearer ${capabilityToken}`
+    )
+  ) {
+    return new Response(null, { status: 403 });
+  }
+  const authorized = await isInferenceAuthorized(claimed);
+  if (!authorized) return new Response(null, { status: 403 });
+  const body = await request.json().catch(() => undefined) as
+    | { configurationDigest?: unknown; configuration?: unknown }
+    | undefined;
+  if (
+    body?.configurationDigest !== claimed.run.configurationDigest ||
+    await sha256Hex(canonicalJson(body.configuration)) !== claimed.run.configurationDigest ||
+    canonicalJson(body.configuration) !== canonicalJson(expectedConfiguration)
+  ) {
+    return new Response(null, { status: 409 });
+  }
+
+  const configuration = parseRunConfiguration(body.configuration);
+  const revoked = new AbortController();
+  const signal = AbortSignal.any([request.signal, executionSignal, revoked.signal]);
+  const stopAuthorizationMonitor = monitorInferenceAuthorization(
+    claimed,
+    revoked,
+    signal
+  );
+  const generator = streamRunToolLoop(
+    claimed,
+    configuration,
+    capabilities,
+    signal,
+    activeExecutionClock
+  );
+  const encoder = new TextEncoder();
+  return new Response(new ReadableStream({
+    async start(controller) {
+      try {
+        const iterator = generator[Symbol.asyncIterator]();
+        let pending = iterator.next();
+        while (true) {
+          const next = await nextBrokerEventOrHeartbeat(pending, brokerHeartbeatMs);
+          if (next.kind === "heartbeat") {
+            controller.enqueue(encoder.encode("\n"));
+            continue;
           }
-        },
-        cancel() {
-          stopAuthorizationMonitor();
-          revoked.abort();
+          if (next.result.done) break;
+          controller.enqueue(encoder.encode(`${JSON.stringify(next.result.value)}\n`));
+          pending = iterator.next();
         }
-      }), {
-        headers: {
-          "content-type": "application/x-ndjson; charset=utf-8",
-          "cache-control": "no-store"
+        controller.close();
+      } catch (error) {
+        if (!signal.aborted) {
+          controller.error(error);
+        } else {
+          try {
+            controller.close();
+          } catch {}
         }
-      });
+      } finally {
+        stopAuthorizationMonitor();
+      }
+    },
+    cancel() {
+      stopAuthorizationMonitor();
+      revoked.abort();
     }
-  }) as unknown as LocalBroker;
+  }), {
+    headers: {
+      "content-type": "application/x-ndjson; charset=utf-8",
+      "cache-control": "no-store"
+    }
+  });
 }
 
 export function nextBrokerEventOrHeartbeat<T>(

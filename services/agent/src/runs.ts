@@ -19,6 +19,7 @@ import { decideApproval } from "@lush/tools/gateway";
 import type { Kysely, Transaction } from "kysely";
 import { lushAgent } from "./agents/lush";
 import { normalizeAgentChatMessages } from "./chat-request";
+import { configuredIsolationRuntime } from "./harness/provider";
 import { allocateModelToolName } from "./model-tool-name";
 import {
   attachmentsFromMetadata,
@@ -299,6 +300,7 @@ export async function createAgentRun(
       runtimeMemory: []
     };
     const capabilityDigest = await sha256Hex(canonicalJson(capabilities));
+    const isolation = configuredIsolationRuntime();
     const now = new Date();
     const byteSize = reusedOrigin
       ? 0
@@ -326,9 +328,11 @@ export async function createAgentRun(
         sessionId: thread.id,
         profile: "chat",
         status: "provisioning",
-        isolationProvider: "subprocess",
+        isolationProvider: isolation.kind,
         backendHandle: null,
-        imageDigest: `builtin:lush@${builtinLushRevisionDigest}`,
+        imageDigest: isolation.kind === "subprocess"
+          ? `builtin:lush@${builtinLushRevisionDigest}`
+          : isolation.imageDigest,
         limits: runLimits,
         leaseExpiresAt: null,
         // Phase 1 subprocesses retain no backend state after destruction, so
@@ -357,7 +361,7 @@ export async function createAgentRun(
         capabilityDigest,
         configurationDigest,
         configuration,
-        isolationProvider: "subprocess",
+        isolationProvider: isolation.kind,
         untrustedContentIngested: hasUntrustedContent(body.message, context.project),
         limits: runLimits,
         modelSelection: selectedModel,

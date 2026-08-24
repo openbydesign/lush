@@ -29,7 +29,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { envValue } from "@lush/config/env";
-import type { Harness, HarnessResponse, HarnessStart } from "./protocol";
+import {
+  parseHarnessResponse,
+  type Harness,
+  type HarnessResponse,
+  type HarnessStart
+} from "./protocol";
 import {
   IsolationError,
   type ActiveExecutionClock,
@@ -113,7 +118,8 @@ export class SubprocessIsolationProvider implements IsolationProvider {
   async hibernate(): Promise<void> {}
 
   async destroy(environmentId: string): Promise<void> {
-    this.environments.delete(environmentId);
+    const environment = this.environments.get(environmentId);
+    if (environment) await environment.destroy();
   }
 }
 
@@ -285,27 +291,14 @@ class SubprocessHarness implements Harness {
 }
 
 function parseFrame(line: string): HarnessResponse {
-  let parsed: unknown;
   try {
-    parsed = JSON.parse(line);
-  } catch {
+    return parseHarnessResponse(line);
+  } catch (error) {
     throw new IsolationError(
       "harness_protocol_error",
-      `Harness emitted a non-JSON frame: ${line.slice(0, 200)}`
+      error instanceof Error ? error.message : String(error)
     );
   }
-  if (
-    parsed &&
-    typeof parsed === "object" &&
-    ((parsed as { type?: unknown }).type === "outputs" ||
-      (parsed as { type?: unknown }).type === "end")
-  ) {
-    return parsed as HarnessResponse;
-  }
-  throw new IsolationError(
-    "harness_protocol_error",
-    "Harness emitted a frame with an unknown type"
-  );
 }
 
 /** Build the child env from an allowlist, reading through the config boundary. */

@@ -49,9 +49,8 @@ const deltaFlushBytes = 1024;
  * immutable run bundle plus one short-lived, run-bound inference capability;
  * it never receives an upstream provider credential.
  *
- * TODO(Phase 3): replace this loopback-only endpoint and opaque token with the
- * isolation-provider-reachable broker and signed expiring audience-bound token
- * defined by the broker-token plan. This Phase 1 transport is not that contract.
+ * The capability is short-lived and run-bound. Remote isolation providers use
+ * an HTTPS broker endpoint; local subprocesses retain the loopback transport.
  */
 export function brokeredLushHarness(id = "lush-brokered"): Harness {
   return {
@@ -96,7 +95,7 @@ function normalizeBrokeredConfig(value: unknown): BrokeredLushConfig {
   const candidate = value as Partial<BrokeredLushConfig>;
   if (
     typeof candidate.brokerUrl !== "string" ||
-    !candidate.brokerUrl.startsWith("http://127.0.0.1:") ||
+    !isAllowedBrokerUrl(candidate.brokerUrl) ||
     typeof candidate.capabilityToken !== "string" ||
     candidate.capabilityToken.length < 32 ||
     typeof candidate.configurationDigest !== "string" ||
@@ -105,6 +104,17 @@ function normalizeBrokeredConfig(value: unknown): BrokeredLushConfig {
     throw new Error("Brokered Lush harness configuration is invalid");
   }
   return candidate as BrokeredLushConfig;
+}
+
+function isAllowedBrokerUrl(value: unknown) {
+  if (typeof value !== "string") return false;
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" ||
+      (url.protocol === "http:" && url.hostname === "127.0.0.1");
+  } catch {
+    return false;
+  }
 }
 
 type BrokerEvent =

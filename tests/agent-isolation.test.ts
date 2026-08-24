@@ -23,6 +23,7 @@ async function collect(gen: AsyncGenerator<ExecResponse>): Promise<ExecResponse[
 }
 
 const baseSpec = (overrides: Partial<EnvironmentSpec> = {}): EnvironmentSpec => ({
+  environmentId: crypto.randomUUID(),
   profile: "chat",
   organizationId: "org",
   ownerUserId: "user",

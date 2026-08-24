@@ -2,7 +2,8 @@
  * Harness host: the process entrypoint that runs inside an isolation boundary.
  *
  * The subprocess (and, later, container/microVM/remote-sandbox) providers boot
- * this script. It reads a single `HarnessStart` as one JSON payload on stdin,
+ * this script. It reads a single `HarnessStart` as one JSON payload on stdin
+ * or from a workspace file supplied by a remote isolation provider,
  * runs the selected harness, and streams `HarnessResponse` frames as NDJSON on
  * stdout — the peer of `SubprocessHarness`. In a real sandbox image the harness
  * is baked in and selected by id; here we ship `echo` for the text path plus an
@@ -11,9 +12,11 @@
  */
 
 import { envValue } from "@lush/config/env";
+import { readFile } from "node:fs/promises";
 import { textMessage } from "./content";
 import { brokeredLushHarness, echoHarness } from "./harnesses";
 import type { Harness, HarnessResponse, HarnessStart } from "./protocol";
+import { containedWorkspacePath } from "./workspace-path";
 
 /**
  * Reports whether a sensitive host env var leaked into the sandbox. Reads go
@@ -72,13 +75,18 @@ async function readStdin(): Promise<string> {
   return data;
 }
 
+async function readStartPayload(path: string | undefined): Promise<string> {
+  if (!path) return readStdin();
+  return readFile(containedWorkspacePath(path), "utf8");
+}
+
 function write(frame: HarnessResponse): void {
   process.stdout.write(`${JSON.stringify(frame)}\n`);
 }
 
 async function main(): Promise<void> {
   const harnessId = process.argv[2] ?? "echo";
-  const raw = await readStdin();
+  const raw = await readStartPayload(process.argv[3]);
   const start = JSON.parse(raw) as HarnessStart;
   const harness = resolveHarness(harnessId);
   const controller = new AbortController();

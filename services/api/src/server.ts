@@ -29,6 +29,7 @@ import {
   streamDurableRun
 } from "@lush/agent/run-stream";
 import {
+  handleAgentRunInferenceBroker,
   scheduleAgentRunExecution,
   startAgentRunRecoveryLoop
 } from "@lush/agent/run-executor";
@@ -341,6 +342,9 @@ app.use(
 
 app.get("/health", (c) => c.json(healthResponse()));
 app.get(apiSpec.healthPath, (c) => c.json(healthResponse()));
+app.post("/v1beta/internal/agent-runs/:runId/inference", (c) =>
+  handleAgentRunInferenceBroker(c.req.param("runId"), c.req.raw)
+);
 
 function healthResponse() {
   return {
